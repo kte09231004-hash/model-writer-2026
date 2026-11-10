@@ -63,7 +63,12 @@
       if (s.center === 'mean') t += `상호작용항은 ${josa(nameOf(L, s.x), WA)} ${josa(nameOf(L, s.w), EUL)} 평균중심화한 뒤 곱하여 생성하였다. `;
       else t += `상호작용항은 ${josa(nameOf(L, s.x), WA)} ${nameOf(L, s.w)}의 원점수를 곱하여 생성하였다(중심화하지 않음). `;
       if (s.probe === 'binary') t += `조절변인이 두 값을 가지는 변인이므로 각 값에서 ${nameOf(L, s.x)}의 조건부 효과를 산출하였다.`;
-      else t += `조건부 효과는 ${nameOf(L, s.w)}의 ${s.probe === 'meansd' ? '평균 및 평균 ±1 표준편차' : '16번째, 50번째, 84번째 백분위수'}에서 산출하였고, Johnson-Neyman 방법으로 조건부 효과가 유의한 조절변인의 범위를 확인하였다.`;
+      else {
+        t += `조건부 효과는 ${nameOf(L, s.w)}의 ${s.probe === 'meansd' ? '평균 및 평균 ±1 표준편차' : '16번째, 50번째, 84번째 백분위수'}에서 산출하였다.`;
+        const jn = res.jn;
+        if (jn && ['all_sig', 'none_sig', 'changes'].includes(jn.status)) t += ` 또한 Johnson-Neyman 방법으로 ${conf}% 신뢰수준에서 ${nameOf(L, s.x)}의 조건부 효과의 유의성이 바뀌는 ${nameOf(L, s.w)} 값을 산출하였다.`;
+        else if (jn && jn.status === 'failed') t += ` Johnson-Neyman 경계값 산출을 시도하였으나 수치 문제로 산출하지 못하였다.`;
+      }
     }
     return t;
   }
@@ -113,18 +118,63 @@
         (s.center === 'mean' ? ` ${josa(nameOf(L, s.x), WA)} ${josa(nameOf(L, s.w), EUN)} 평균중심화함.` : '')
     };
     const cRows = res.conditional.map(c => [
-      s.probe === 'binary' ? `${nameOf(L, s.w)} = ${num(c.w, 0)}` : `${c.label} (${nameOf(L, s.w)} = ${num(c.w, d)})`, num(c.effect, d), num(c.se, d), num(c.t, d), pCell(c.p), ci(c.llci, c.ulci, d)
+      s.probe === 'binary' ? `${nameOf(L, s.w)} = ${num(c.wRaw, 0)}` : `${c.label} (${nameOf(L, s.w)} = ${num(c.wRaw, d)}${s.center === 'mean' ? `, 중심화 값 ${num(c.w, d)}` : ''})`, num(c.effect, d), num(c.se, d), num(c.t, d), pCell(c.p), ci(c.llci, c.ulci, d)
     ]);
     const t2 = {
       title: `${nameOf(L, s.w)} 수준별 ${nameOf(L, s.x)}의 조건부 효과`,
       headers: [`${nameOf(L, s.w)} 수준`, 'B', 'SE', 't', 'p', `${conf}% CI`],
       rows: cRows,
-      note: s.center === 'mean' ? `${nameOf(L, s.w)} 값은 평균중심화된 값임(원점수 = 표시값 + ${num(res.means.w, d)}).` : ''
+      note: s.center === 'mean' ? `${nameOf(L, s.w)} 값은 원점수이며, 괄호 안 중심화 값은 분석에 사용한 평균중심화 값임(원점수 = 중심화 값 + ${num(res.means.w, d)}).` : ''
     };
     return [t1, t2];
   }
 
-  function tables(res, opt) { return res.model === 'moderation' ? moderationTables(res, opt) : mediationTables(res, opt); }
+  // ---------- Johnson-Neyman 요약 (서술·표가 같은 값을 사용) ----------
+  // 값은 W 원점수 기준으로 보고하고, 평균중심화한 경우 분석에 쓴 중심화 값을 함께 표시함
+  function jnText(res, opt) {
+    const jn = res.jn, s = res.spec, L = opt.labels, d = opt.dec;
+    if (!jn || jn.status === 'not_applicable') return '';
+    const conf = Math.round(jn.conf * 100), X = nameOf(L, s.x), W = nameOf(L, s.w);
+    const cen = jn.scale === 'centered';
+    const v = (raw, c) => cen ? `${num(raw, d)}(중심화 값 ${num(c, d)})` : num(raw, d);
+    const head = `Johnson-Neyman 분석 결과(${conf}% 신뢰수준), `;
+    if (jn.status === 'failed') return `Johnson-Neyman 경계값은 수치 문제로 산출하지 못하였다(${jn.reason}).`;
+    const range = `관측된 ${W}의 범위(${num(jn.wminRaw, d)} ~ ${num(jn.wmaxRaw, d)}${cen ? ', 원점수 기준' : ''})`;
+    const outside = jn.outside.length ? ` 관측 범위 밖에도 경계값이 있었다(${W} = ${jn.outside.map(b => cen ? `${num(b.wRaw, d)}, 중심화 값 ${num(b.w, d)}` : num(b.wRaw, d)).join('; ')}).` : '';
+    if (jn.status === 'all_sig') return head + `${range} 전체에서 ${X}의 조건부 효과가 유의하였다.` + (jn.roots.length ? outside : ' 관측 범위 안에서 유의성이 바뀌는 경계값은 없었다.');
+    if (jn.status === 'none_sig') return head + `${range} 전체에서 ${X}의 조건부 효과가 유의하지 않았다.` + (jn.roots.length ? outside : ' 관측 범위 안에서 유의성이 바뀌는 경계값은 없었다.');
+    const seg = g => `${num(g.fromRaw, d)} ~ ${num(g.toRaw, d)} 구간(사례의 ${num(g.pct, 1)}%)`;
+    const sig = jn.segments.filter(g => g.sig), non = jn.segments.filter(g => !g.sig);
+    return head + `${X}의 조건부 효과의 유의성이 바뀌는 경계값은 ${W} = ${jn.bounds.map(b => v(b.wRaw, b.w)).join(', ')} 지점이었다. ` +
+      `${josa(W, I)} ${sig.map(seg).join(', ')}에 있을 때 ${X}의 조건부 효과는 유의하였고, ${non.map(seg).join(', ')}에서는 유의하지 않았다.` + outside;
+  }
+  function jnTable(res, opt) {
+    const jn = res.jn, s = res.spec, L = opt.labels, d = opt.dec;
+    if (!jn || jn.status === 'not_applicable') return null;
+    const W = nameOf(L, s.w), X = nameOf(L, s.x), cen = jn.scale === 'centered';
+    const conf = Math.round(jn.conf * 100), alpha = noLead(1 - jn.conf, 2);
+    const headers = ['구분', `${W} (원점수)`].concat(cen ? [`${W} (중심화 값)`] : [], [`${X}의 조건부 효과`, '사례 비율']);
+    const row = (a, raw, c, e, pct) => [a, raw].concat(cen ? [c] : [], [e, pct]);
+    const rows = [];
+    if (jn.status === 'failed') {
+      rows.push(row('계산 불가', '—', '—', jn.reason, '—'));
+    } else {
+      rows.push(row('관측 범위', `${num(jn.wminRaw, d)} ~ ${num(jn.wmaxRaw, d)}`, `${num(jn.wmin, d)} ~ ${num(jn.wmax, d)}`, '', '100.0%'));
+      if (!jn.roots.length) rows.push(row('경계값', '없음', '없음', '유의성이 바뀌는 지점 없음', ''));
+      jn.roots.forEach(b => rows.push(row('경계값', num(b.wRaw, d), num(b.w, d), b.inRange ? '유의성 전환 지점' : '관측 범위 밖', b.inRange ? `${num(b.pctBelow, 1)}% 아래 / ${num(b.pctAbove, 1)}% 위` : '')));
+      jn.segments.forEach(g => rows.push(row('구간', `${num(g.fromRaw, d)} ~ ${num(g.toRaw, d)}`, `${num(g.from, d)} ~ ${num(g.to, d)}`, g.sig ? `유의 (p < ${alpha})` : `비유의 (p ≥ ${alpha})`, `${num(g.pct, 1)}%`)));
+    }
+    const note = jn.status === 'failed'
+      ? `${conf}% 신뢰수준에서 Johnson-Neyman 경계값을 계산하지 못함.`
+      : `${conf}% 신뢰수준, t 임계값 = ${num(jn.tcrit, 3)} (df = ${jn.df}). 경계값은 ${X}의 조건부 효과의 |B / SE|가 t 임계값과 같아지는 ${W} 값임. 상호작용항 검정과 별개로, ${W}의 각 값에서 조건부 효과가 0인지 검정한 결과임.` + (cen ? ` 원점수 = 중심화 값 + ${num(res.means.w, d)}.` : '');
+    return { title: `Johnson-Neyman 분석 결과 (${W}의 값에 따른 ${X}의 조건부 효과 유의 구간)`, headers, rows, note };
+  }
+
+  function tables(res, opt) {
+    if (res.model !== 'moderation') return mediationTables(res, opt);
+    const t = moderationTables(res, opt), j = jnTable(res, opt);
+    return j ? t.concat([j]) : t;
+  }
 
   function tableToHTML(t, i) {
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -212,30 +262,20 @@
     const paras = [];
     let p1 = `${covPre}${X}, ${W}, 그리고 두 변인의 상호작용항을 투입하여 ${josa(Y, EUL)} 예측한 결과, 회귀식은 ${Y} 변량의 ${num(f.r2 * 100, 1)}%를 설명하였다(R² = ${noLead(f.r2, d)}, F(${f.df1}, ${f.df2}) = ${num(f.F, d)}, p ${pStr(f.pF)}). `;
     if (ri.p < alpha) p1 += `${X} × ${W} 상호작용항은 ${josa(Y, EUL)} 유의하게 예측하였으며(${iStat}), 상호작용항 추가로 설명력이 유의하게 증가하였다(${chStat}). 이는 ${josa(X, WA)} ${Y}의 관계가 ${W}의 수준에 따라 달라짐을 의미한다.`;
-    else p1 += `${X} × ${W} 상호작용항은 유의하지 않았으며(${iStat}; ${chStat}), ${W}의 조절효과는 확인되지 않았다.`;
+    else p1 += `${X} × ${W} 상호작용항은 유의하지 않았으며(${iStat}; ${chStat}), ${W}의 조절효과는 통계적으로 확인되지 않았다.`;
     paras.push(p1);
-    if (ri.p < alpha) {
+    {
       const cs = res.conditional.map(c => {
-        const where = s.probe === 'binary' ? `${W} = ${num(c.w, 0)}일 때` : `${josa(W, I)} ${c.label}(${num(c.w, d)})일 때`;
+        const wv = s.center === 'mean' ? `${num(c.wRaw, d)}, 중심화 값 ${num(c.w, d)}` : num(c.w, d);
+        const where = s.probe === 'binary' ? `${W} = ${num(c.wRaw, 0)}일 때` : `${josa(W, I)} ${c.label}(${wv})일 때`;
         const stat = `B = ${num(c.effect, d)}, SE = ${num(c.se, d)}, t = ${num(c.t, d)}, p ${pStr(c.p)}, ${conf}% CI ${ci(c.llci, c.ulci, d)}`;
         return `${where} ${X}의 조건부 효과는 ${c.p < alpha ? (c.effect > 0 ? '유의한 정적 효과로 나타났고' : '유의한 부적 효과로 나타났고') : '유의하지 않았고'}(${stat})`;
       });
-      let p2 = '단순기울기 분석 결과, ' + cs.join(', ').replace(/고\(([^)]*)\)$/, '다($1)') + '.';
+      const lead = ri.p < alpha ? '단순기울기 분석 결과, ' : `상호작용항 검정과 별개로 ${W}의 특정 값에서 ${X}의 조건부 효과를 검정한 결과, `;
+      let p2 = lead + cs.join(', ').replace(/고\(([^)]*)\)$/, '다($1)') + '.';
       p2 = p2.replace(/나타났고\(([^()]*)\)\.$/, '나타났다($1).').replace(/않았고\(([^()]*)\)\.$/, '않았다($1).');
-      if (res.jn) {
-        const b = res.jn.bounds, cen = s.center === 'mean' ? '(평균중심화된 값 기준)' : '';
-        if (b.length === 0) p2 += ` Johnson-Neyman 분석 결과, 관찰된 ${W}의 범위(${num(res.jn.wmin, d)} ~ ${num(res.jn.wmax, d)})${cen} 전체에서 조건부 효과가 ${res.jn.sigAtMin ? '유의하였다' : '유의하지 않았다'}.`;
-        else if (b.length === 1) {
-          const v = b[0];
-          p2 += res.jn.sigAtMin
-            ? ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(v.w, d)}보다 낮을 때(사례의 ${num(v.pctBelow, 1)}%) ${X}의 조건부 효과가 유의하였다.`
-            : ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(v.w, d)}보다 높을 때(사례의 ${num(v.pctAbove, 1)}%) ${X}의 조건부 효과가 유의하였다.`;
-        } else {
-          p2 += res.jn.sigAtMin
-            ? ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(b[0].w, d)}보다 낮거나 ${num(b[1].w, d)}보다 높을 때 ${X}의 조건부 효과가 유의하였다.`
-            : ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(b[0].w, d)}에서 ${num(b[1].w, d)} 사이일 때 ${X}의 조건부 효과가 유의하였다.`;
-        }
-      }
+      const jt = jnText(res, opt);
+      if (jt) p2 += ' ' + jt;
       paras.push(p2);
     }
     return paras;
@@ -357,7 +397,7 @@
     '논문에는 실제 사용한 분석 도구와 설정을 기재해야 함. 이 도구로 분석했다면 SPSS PROCESS로 분석했다고 쓰면 안 됨.'
   ];
 
-  const api = { methodText, tables, tableToHTML, tableToTSV, tableToCSV, resultText, figures, josa, num, pStr, MODEL_INFO, HAYES_REF, CAUTION };
+  const api = { methodText, jnText, jnTable, tables, tableToHTML, tableToTSV, tableToCSV, resultText, figures, josa, num, pStr, MODEL_INFO, HAYES_REF, CAUTION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Report = api;
 })(typeof window !== 'undefined' ? window : this);

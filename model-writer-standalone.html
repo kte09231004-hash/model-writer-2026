@@ -171,6 +171,14 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
 .caution b { color: var(--warn); font-weight: 600; }
 .caution ul { margin: 4px 0 0; padding-left: 18px; }
 .settings { font-family: var(--f-num); font-size: 12.5px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; background: var(--code-bg); padding: 12px 16px; border-radius: var(--r); margin: 0; max-width: 760px; }
+.msg.notice { background: var(--warn-soft); color: var(--ink); border-left: 3px solid var(--warn); }
+.msg.notice b, .msg.fail b { color: var(--warn); }
+.msg.fail { background: var(--warn-soft); color: var(--ink); border-left: 3px solid var(--warn); }
+#statusBanner { margin-bottom: 16px; font-size: 14px; line-height: 1.6; padding: 12px 16px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 8px); z-index: 5; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.results.is-stale > .rcard, .results.is-stale > .msg:not(#statusBanner) { opacity: .5; }
+.results.is-running > .rcard { opacity: .5; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+button:disabled:hover { border-color: var(--field-line); background: var(--surface); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 8px 16px; border-radius: var(--r); font-size: 13px; z-index: 20; }
 @media (max-width: 900px) { .results { padding: 24px 16px; } }
 @media (max-width: 480px) {
@@ -632,23 +640,52 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
       return { label: probeLabels[i], w, wRaw: center === 'mean' ? w + mw : w, effect: eff, se, t, p: tPvalue(t, fit.df2), llci: eff - tc * se, ulci: eff + tc * se };
     });
 
-    // Johnson-Neyman 경계값
-    let jn = null;
-    if (wUniq.length > 2 && spec.jn !== false) {
-      const A = b3 * b3 - tc * tc * v33, Bq = 2 * (b1 * b3 - tc * tc * v13), C = b1 * b1 - tc * tc * v11;
+    // Johnson-Neyman: |b1 + b3·w| / SE(w) = t임계값 을 만족하는 w (조건부 효과 유의성이 바뀌는 지점)
+    // status: all_sig(관측 범위 전체 유의) / none_sig(전체 비유의) / changes(범위 안에서 바뀜)
+    //         / failed(수치 문제로 계산 불가) / not_applicable(W가 두 값뿐)
+    const toRaw = w => (center === 'mean' ? w + mw : w);
+    let jn;
+    if (wUniq.length <= 2) {
+      jn = { status: 'not_applicable', reason: '조절변인이 두 값만 가지므로 Johnson-Neyman 방법을 적용하지 않음', conf };
+    } else {
       const wmin = wUniq[0], wmax = wUniq[wUniq.length - 1];
-      let roots = [];
-      if (Math.abs(A) < 1e-14) { if (Math.abs(Bq) > 1e-14) roots = [-C / Bq]; }
-      else { const disc = Bq * Bq - 4 * A * C; if (disc >= 0) roots = [(-Bq - Math.sqrt(disc)) / (2 * A), (-Bq + Math.sqrt(disc)) / (2 * A)]; }
-      roots = roots.filter(r => r >= wmin && r <= wmax).sort((a, b) => a - b);
-      jn = roots.map(r => ({
-        w: r, wRaw: center === 'mean' ? r + mw : r,
-        pctBelow: 100 * W.filter(v => v < r).length / n,
-        pctAbove: 100 * W.filter(v => v > r).length / n
-      }));
-      // 관찰 범위의 양 끝에서 조건부 효과 유의 여부
-      const sigAt = w => { const e = b1 + b3 * w, s = Math.sqrt(v11 + 2 * w * v13 + w * w * v33); return Math.abs(e / s) >= tc; };
-      jn = { bounds: jn, sigAtMin: sigAt(wmin), sigAtMax: sigAt(wmax), wmin, wmax };
+      const base = { conf, tcrit: tc, df: fit.df2, scale: center === 'mean' ? 'centered' : 'raw', wmin, wmax, wminRaw: toRaw(wmin), wmaxRaw: toRaw(wmax) };
+      const seAt = w => Math.sqrt(v11 + 2 * w * v13 + w * w * v33);
+      const sigAt = w => Math.abs((b1 + b3 * w) / seAt(w)) >= tc;
+      try {
+        const A = b3 * b3 - tc * tc * v33, Bq = 2 * (b1 * b3 - tc * tc * v13), C = b1 * b1 - tc * tc * v11;
+        if (![A, Bq, C, v11, v13, v33].every(isFinite)) throw new Error('회귀계수 또는 공분산 값이 유한하지 않음');
+        let roots = [];
+        const scaleA = Math.max(b3 * b3, tc * tc * v33, 1e-300);
+        if (Math.abs(A) / scaleA < 1e-12) { if (Math.abs(Bq) > 1e-300) roots = [-C / Bq]; }
+        else {
+          const disc = Bq * Bq - 4 * A * C;
+          if (disc >= 0) { const sq = Math.sqrt(disc); roots = [(-Bq - sq) / (2 * A), (-Bq + sq) / (2 * A)]; }
+        }
+        if (!roots.every(isFinite)) throw new Error('경계값이 유한하지 않음');
+        roots.sort((a, b) => a - b);
+        const all = roots.map(r => ({
+          w: r, wRaw: toRaw(r), inRange: r >= wmin && r <= wmax,
+          pctBelow: 100 * W.filter(v => v < r).length / n,
+          pctAbove: 100 * W.filter(v => v > r).length / n
+        }));
+        const bounds = all.filter(b => b.inRange);
+        // 관측 범위를 경계값으로 나눈 구간별 유의 여부(구간 중앙에서 판정)
+        const cuts = [wmin].concat(bounds.map(b => b.w), [wmax]);
+        const segments = [];
+        for (let i = 0; i < cuts.length - 1; i++) {
+          const lo = cuts[i], hi = cuts[i + 1];
+          if (hi - lo <= 0) continue;
+          const sig = sigAt((lo + hi) / 2);
+          segments.push({ from: lo, to: hi, fromRaw: toRaw(lo), toRaw: toRaw(hi), sig, pct: 100 * W.filter(v => v >= lo && v <= hi).length / n });
+        }
+        if (!segments.length) throw new Error('관측 범위를 구간으로 나눌 수 없음');
+        const anySig = segments.some(s => s.sig), allSig = segments.every(s => s.sig);
+        const status = allSig ? 'all_sig' : !anySig ? 'none_sig' : 'changes';
+        jn = Object.assign(base, { status, roots: all, bounds, outside: all.filter(b => !b.inRange), segments, sigAtMin: sigAt(wmin), sigAtMax: sigAt(wmax) });
+      } catch (e) {
+        jn = Object.assign(base, { status: 'failed', reason: e.message, roots: [], bounds: [], outside: [], segments: [] });
+      }
     }
 
     // 단순기울기 그림용 예측값: X는 16·84번째 백분위(또는 M±1SD), 공변량은 평균
@@ -775,7 +812,12 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
       if (s.center === 'mean') t += `상호작용항은 ${josa(nameOf(L, s.x), WA)} ${josa(nameOf(L, s.w), EUL)} 평균중심화한 뒤 곱하여 생성하였다. `;
       else t += `상호작용항은 ${josa(nameOf(L, s.x), WA)} ${nameOf(L, s.w)}의 원점수를 곱하여 생성하였다(중심화하지 않음). `;
       if (s.probe === 'binary') t += `조절변인이 두 값을 가지는 변인이므로 각 값에서 ${nameOf(L, s.x)}의 조건부 효과를 산출하였다.`;
-      else t += `조건부 효과는 ${nameOf(L, s.w)}의 ${s.probe === 'meansd' ? '평균 및 평균 ±1 표준편차' : '16번째, 50번째, 84번째 백분위수'}에서 산출하였고, Johnson-Neyman 방법으로 조건부 효과가 유의한 조절변인의 범위를 확인하였다.`;
+      else {
+        t += `조건부 효과는 ${nameOf(L, s.w)}의 ${s.probe === 'meansd' ? '평균 및 평균 ±1 표준편차' : '16번째, 50번째, 84번째 백분위수'}에서 산출하였다.`;
+        const jn = res.jn;
+        if (jn && ['all_sig', 'none_sig', 'changes'].includes(jn.status)) t += ` 또한 Johnson-Neyman 방법으로 ${conf}% 신뢰수준에서 ${nameOf(L, s.x)}의 조건부 효과의 유의성이 바뀌는 ${nameOf(L, s.w)} 값을 산출하였다.`;
+        else if (jn && jn.status === 'failed') t += ` Johnson-Neyman 경계값 산출을 시도하였으나 수치 문제로 산출하지 못하였다.`;
+      }
     }
     return t;
   }
@@ -825,18 +867,63 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
         (s.center === 'mean' ? ` ${josa(nameOf(L, s.x), WA)} ${josa(nameOf(L, s.w), EUN)} 평균중심화함.` : '')
     };
     const cRows = res.conditional.map(c => [
-      s.probe === 'binary' ? `${nameOf(L, s.w)} = ${num(c.w, 0)}` : `${c.label} (${nameOf(L, s.w)} = ${num(c.w, d)})`, num(c.effect, d), num(c.se, d), num(c.t, d), pCell(c.p), ci(c.llci, c.ulci, d)
+      s.probe === 'binary' ? `${nameOf(L, s.w)} = ${num(c.wRaw, 0)}` : `${c.label} (${nameOf(L, s.w)} = ${num(c.wRaw, d)}${s.center === 'mean' ? `, 중심화 값 ${num(c.w, d)}` : ''})`, num(c.effect, d), num(c.se, d), num(c.t, d), pCell(c.p), ci(c.llci, c.ulci, d)
     ]);
     const t2 = {
       title: `${nameOf(L, s.w)} 수준별 ${nameOf(L, s.x)}의 조건부 효과`,
       headers: [`${nameOf(L, s.w)} 수준`, 'B', 'SE', 't', 'p', `${conf}% CI`],
       rows: cRows,
-      note: s.center === 'mean' ? `${nameOf(L, s.w)} 값은 평균중심화된 값임(원점수 = 표시값 + ${num(res.means.w, d)}).` : ''
+      note: s.center === 'mean' ? `${nameOf(L, s.w)} 값은 원점수이며, 괄호 안 중심화 값은 분석에 사용한 평균중심화 값임(원점수 = 중심화 값 + ${num(res.means.w, d)}).` : ''
     };
     return [t1, t2];
   }
 
-  function tables(res, opt) { return res.model === 'moderation' ? moderationTables(res, opt) : mediationTables(res, opt); }
+  // ---------- Johnson-Neyman 요약 (서술·표가 같은 값을 사용) ----------
+  // 값은 W 원점수 기준으로 보고하고, 평균중심화한 경우 분석에 쓴 중심화 값을 함께 표시함
+  function jnText(res, opt) {
+    const jn = res.jn, s = res.spec, L = opt.labels, d = opt.dec;
+    if (!jn || jn.status === 'not_applicable') return '';
+    const conf = Math.round(jn.conf * 100), X = nameOf(L, s.x), W = nameOf(L, s.w);
+    const cen = jn.scale === 'centered';
+    const v = (raw, c) => cen ? `${num(raw, d)}(중심화 값 ${num(c, d)})` : num(raw, d);
+    const head = `Johnson-Neyman 분석 결과(${conf}% 신뢰수준), `;
+    if (jn.status === 'failed') return `Johnson-Neyman 경계값은 수치 문제로 산출하지 못하였다(${jn.reason}).`;
+    const range = `관측된 ${W}의 범위(${num(jn.wminRaw, d)} ~ ${num(jn.wmaxRaw, d)}${cen ? ', 원점수 기준' : ''})`;
+    const outside = jn.outside.length ? ` 관측 범위 밖에도 경계값이 있었다(${W} = ${jn.outside.map(b => cen ? `${num(b.wRaw, d)}, 중심화 값 ${num(b.w, d)}` : num(b.wRaw, d)).join('; ')}).` : '';
+    if (jn.status === 'all_sig') return head + `${range} 전체에서 ${X}의 조건부 효과가 유의하였다.` + (jn.roots.length ? outside : ' 관측 범위 안에서 유의성이 바뀌는 경계값은 없었다.');
+    if (jn.status === 'none_sig') return head + `${range} 전체에서 ${X}의 조건부 효과가 유의하지 않았다.` + (jn.roots.length ? outside : ' 관측 범위 안에서 유의성이 바뀌는 경계값은 없었다.');
+    const seg = g => `${num(g.fromRaw, d)} ~ ${num(g.toRaw, d)} 구간(사례의 ${num(g.pct, 1)}%)`;
+    const sig = jn.segments.filter(g => g.sig), non = jn.segments.filter(g => !g.sig);
+    return head + `${X}의 조건부 효과의 유의성이 바뀌는 경계값은 ${W} = ${jn.bounds.map(b => v(b.wRaw, b.w)).join(', ')} 지점이었다. ` +
+      `${josa(W, I)} ${sig.map(seg).join(', ')}에 있을 때 ${X}의 조건부 효과는 유의하였고, ${non.map(seg).join(', ')}에서는 유의하지 않았다.` + outside;
+  }
+  function jnTable(res, opt) {
+    const jn = res.jn, s = res.spec, L = opt.labels, d = opt.dec;
+    if (!jn || jn.status === 'not_applicable') return null;
+    const W = nameOf(L, s.w), X = nameOf(L, s.x), cen = jn.scale === 'centered';
+    const conf = Math.round(jn.conf * 100), alpha = noLead(1 - jn.conf, 2);
+    const headers = ['구분', `${W} (원점수)`].concat(cen ? [`${W} (중심화 값)`] : [], [`${X}의 조건부 효과`, '사례 비율']);
+    const row = (a, raw, c, e, pct) => [a, raw].concat(cen ? [c] : [], [e, pct]);
+    const rows = [];
+    if (jn.status === 'failed') {
+      rows.push(row('계산 불가', '—', '—', jn.reason, '—'));
+    } else {
+      rows.push(row('관측 범위', `${num(jn.wminRaw, d)} ~ ${num(jn.wmaxRaw, d)}`, `${num(jn.wmin, d)} ~ ${num(jn.wmax, d)}`, '', '100.0%'));
+      if (!jn.roots.length) rows.push(row('경계값', '없음', '없음', '유의성이 바뀌는 지점 없음', ''));
+      jn.roots.forEach(b => rows.push(row('경계값', num(b.wRaw, d), num(b.w, d), b.inRange ? '유의성 전환 지점' : '관측 범위 밖', b.inRange ? `${num(b.pctBelow, 1)}% 아래 / ${num(b.pctAbove, 1)}% 위` : '')));
+      jn.segments.forEach(g => rows.push(row('구간', `${num(g.fromRaw, d)} ~ ${num(g.toRaw, d)}`, `${num(g.from, d)} ~ ${num(g.to, d)}`, g.sig ? `유의 (p < ${alpha})` : `비유의 (p ≥ ${alpha})`, `${num(g.pct, 1)}%`)));
+    }
+    const note = jn.status === 'failed'
+      ? `${conf}% 신뢰수준에서 Johnson-Neyman 경계값을 계산하지 못함.`
+      : `${conf}% 신뢰수준, t 임계값 = ${num(jn.tcrit, 3)} (df = ${jn.df}). 경계값은 ${X}의 조건부 효과의 |B / SE|가 t 임계값과 같아지는 ${W} 값임. 상호작용항 검정과 별개로, ${W}의 각 값에서 조건부 효과가 0인지 검정한 결과임.` + (cen ? ` 원점수 = 중심화 값 + ${num(res.means.w, d)}.` : '');
+    return { title: `Johnson-Neyman 분석 결과 (${W}의 값에 따른 ${X}의 조건부 효과 유의 구간)`, headers, rows, note };
+  }
+
+  function tables(res, opt) {
+    if (res.model !== 'moderation') return mediationTables(res, opt);
+    const t = moderationTables(res, opt), j = jnTable(res, opt);
+    return j ? t.concat([j]) : t;
+  }
 
   function tableToHTML(t, i) {
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -924,30 +1011,20 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     const paras = [];
     let p1 = `${covPre}${X}, ${W}, 그리고 두 변인의 상호작용항을 투입하여 ${josa(Y, EUL)} 예측한 결과, 회귀식은 ${Y} 변량의 ${num(f.r2 * 100, 1)}%를 설명하였다(R² = ${noLead(f.r2, d)}, F(${f.df1}, ${f.df2}) = ${num(f.F, d)}, p ${pStr(f.pF)}). `;
     if (ri.p < alpha) p1 += `${X} × ${W} 상호작용항은 ${josa(Y, EUL)} 유의하게 예측하였으며(${iStat}), 상호작용항 추가로 설명력이 유의하게 증가하였다(${chStat}). 이는 ${josa(X, WA)} ${Y}의 관계가 ${W}의 수준에 따라 달라짐을 의미한다.`;
-    else p1 += `${X} × ${W} 상호작용항은 유의하지 않았으며(${iStat}; ${chStat}), ${W}의 조절효과는 확인되지 않았다.`;
+    else p1 += `${X} × ${W} 상호작용항은 유의하지 않았으며(${iStat}; ${chStat}), ${W}의 조절효과는 통계적으로 확인되지 않았다.`;
     paras.push(p1);
-    if (ri.p < alpha) {
+    {
       const cs = res.conditional.map(c => {
-        const where = s.probe === 'binary' ? `${W} = ${num(c.w, 0)}일 때` : `${josa(W, I)} ${c.label}(${num(c.w, d)})일 때`;
+        const wv = s.center === 'mean' ? `${num(c.wRaw, d)}, 중심화 값 ${num(c.w, d)}` : num(c.w, d);
+        const where = s.probe === 'binary' ? `${W} = ${num(c.wRaw, 0)}일 때` : `${josa(W, I)} ${c.label}(${wv})일 때`;
         const stat = `B = ${num(c.effect, d)}, SE = ${num(c.se, d)}, t = ${num(c.t, d)}, p ${pStr(c.p)}, ${conf}% CI ${ci(c.llci, c.ulci, d)}`;
         return `${where} ${X}의 조건부 효과는 ${c.p < alpha ? (c.effect > 0 ? '유의한 정적 효과로 나타났고' : '유의한 부적 효과로 나타났고') : '유의하지 않았고'}(${stat})`;
       });
-      let p2 = '단순기울기 분석 결과, ' + cs.join(', ').replace(/고\(([^)]*)\)$/, '다($1)') + '.';
+      const lead = ri.p < alpha ? '단순기울기 분석 결과, ' : `상호작용항 검정과 별개로 ${W}의 특정 값에서 ${X}의 조건부 효과를 검정한 결과, `;
+      let p2 = lead + cs.join(', ').replace(/고\(([^)]*)\)$/, '다($1)') + '.';
       p2 = p2.replace(/나타났고\(([^()]*)\)\.$/, '나타났다($1).').replace(/않았고\(([^()]*)\)\.$/, '않았다($1).');
-      if (res.jn) {
-        const b = res.jn.bounds, cen = s.center === 'mean' ? '(평균중심화된 값 기준)' : '';
-        if (b.length === 0) p2 += ` Johnson-Neyman 분석 결과, 관찰된 ${W}의 범위(${num(res.jn.wmin, d)} ~ ${num(res.jn.wmax, d)})${cen} 전체에서 조건부 효과가 ${res.jn.sigAtMin ? '유의하였다' : '유의하지 않았다'}.`;
-        else if (b.length === 1) {
-          const v = b[0];
-          p2 += res.jn.sigAtMin
-            ? ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(v.w, d)}보다 낮을 때(사례의 ${num(v.pctBelow, 1)}%) ${X}의 조건부 효과가 유의하였다.`
-            : ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(v.w, d)}보다 높을 때(사례의 ${num(v.pctAbove, 1)}%) ${X}의 조건부 효과가 유의하였다.`;
-        } else {
-          p2 += res.jn.sigAtMin
-            ? ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(b[0].w, d)}보다 낮거나 ${num(b[1].w, d)}보다 높을 때 ${X}의 조건부 효과가 유의하였다.`
-            : ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(b[0].w, d)}에서 ${num(b[1].w, d)} 사이일 때 ${X}의 조건부 효과가 유의하였다.`;
-        }
-      }
+      const jt = jnText(res, opt);
+      if (jt) p2 += ' ' + jt;
       paras.push(p2);
     }
     return paras;
@@ -1069,7 +1146,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     '논문에는 실제 사용한 분석 도구와 설정을 기재해야 함. 이 도구로 분석했다면 SPSS PROCESS로 분석했다고 쓰면 안 됨.'
   ];
 
-  const api = { methodText, tables, tableToHTML, tableToTSV, tableToCSV, resultText, figures, josa, num, pStr, MODEL_INFO, HAYES_REF, CAUTION };
+  const api = { methodText, jnText, jnTable, tables, tableToHTML, tableToTSV, tableToCSV, resultText, figures, josa, num, pStr, MODEL_INFO, HAYES_REF, CAUTION };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Report = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -1079,7 +1156,9 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const state = { rows: [], cols: [], fileName: '', scales: [], labels: {}, last: null };
+  // success: 마지막 성공 분석의 묶음 {sig, res, inputs} — 새 분석이 성공할 때만 통째로 교체함
+  // lastError: 마지막 실패 {sig, message} / running: 계산 중 여부 / dataVersion: 데이터·문항점수 변경 횟수
+  const state = { rows: [], cols: [], fileName: '', scales: [], labels: {}, success: null, view: null, lastError: null, running: false, dataVersion: 0 };
 
   // ---------- 알림 ----------
   let toastT;
@@ -1112,6 +1191,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     const seen = {}; header = header.map(h => { if (seen[h]) { seen[h]++; return h + '_' + seen[h]; } seen[h] = 1; return h; });
     state.rows = matrix.slice(1).map(r => { const o = {}; header.forEach((h, i) => (o[h] = r[i] == null ? '' : String(r[i]))); return o; });
     state.cols = header; state.fileName = name; state.scales = []; state.labels = {};
+    state.dataVersion++;
     refreshData();
   }
   let xlsxLoading = null;
@@ -1183,7 +1263,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     $('covs').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
     $('scItems').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
     $('scRev').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
-    renderLabels(); renderScales();
+    renderLabels(); renderScales(); refreshStatus();
   }
   $('missing').addEventListener('change', refreshData);
 
@@ -1200,6 +1280,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     state.rows.forEach((r, i) => (r[name] = res.scores[i] === '' ? '' : String(res.scores[i])));
     state.cols.push(name);
     state.scales.push({ name, items, rev, min, max, method, alpha: res.alpha, n: res.nComplete, out: res.outOfRange });
+    state.dataVersion++;
     msg('scMsg', res.outOfRange ? `범위(${min}~${max})를 벗어난 응답 ${res.outOfRange}개가 있습니다. 원자료를 확인해 주세요.` : '', res.outOfRange ? 'err' : '');
     $('scName').value = '';
     refreshData(); toast(`${name} 변수를 만들었습니다`);
@@ -1218,7 +1299,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     $('lM1').textContent = m === 'serial' ? '매개변인 M1 (먼저)' : '매개변인 M';
     $('bootOpts').querySelectorAll('label')[0].hidden = $('bootOpts').querySelectorAll('label')[1].hidden = m === 'moderation';
     $('modOpts').hidden = m !== 'moderation';
-    renderLabels();
+    renderLabels(); refreshStatus();
   });
   function roleVars() {
     const m = model(), v = id => $(id).value;
@@ -1232,43 +1313,117 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     const uniq = Array.from(new Set(vars));
     $('labels').innerHTML = uniq.length ? uniq.map(v => `<code>${esc(v)}</code><input type="text" id="lab_${cssId(v)}" data-var="${esc(v)}" value="${esc(state.labels[v] || v)}">`).join('') : '<span class="hint" style="grid-column:1/-1">변수를 지정하면 여기에서 이름을 바꿀 수 있습니다.</span>';
   }
-  $('labels').addEventListener('input', e => { if (e.target.dataset.var) state.labels[e.target.dataset.var] = e.target.value.trim() || e.target.dataset.var; });
   ['vX', 'vY', 'vM1', 'vM2', 'vM3', 'vW'].forEach(id => $(id).addEventListener('change', renderLabels));
   $('covs').addEventListener('change', e => { e.target.closest('.chip').classList.toggle('on', e.target.checked); renderLabels(); });
   ['scItems', 'scRev'].forEach(id => $(id).addEventListener('change', e => e.target.closest('.chip').classList.toggle('on', e.target.checked)));
 
   // ---------- 실행 ----------
   function msg(id, t, kind) { $(id).innerHTML = t ? `<div class="msg ${kind || ''}">${esc(t)}</div>` : ''; }
-  $('run').addEventListener('click', () => {
-    if (!state.rows.length) return msg('runMsg', '먼저 데이터를 불러와 주세요.', 'err');
+  // 분석 결과에 영향을 주는 입력 전체를 하나의 문자열로 만듦 (같으면 같은 분석)
+  function analysisSig() {
     const r = roleVars();
-    if (!r.x || !r.y) return msg('runMsg', 'X와 Y를 지정해 주세요.', 'err');
-    if (r.m === 'simple' && !r.meds[0]) return msg('runMsg', '매개변인 M을 지정해 주세요.', 'err');
-    if (r.m === 'serial' && r.meds.length < 2) return msg('runMsg', '순차매개는 매개변인 M1과 M2가 필요합니다.', 'err');
-    if (r.m === 'moderation' && !r.w) return msg('runMsg', '조절변인 W를 지정해 주세요.', 'err');
+    const o = { dv: state.dataVersion, missing: missingCodes(), model: r.m, x: r.x, y: r.y, covs: r.covs.slice().sort(), conf: $('oConf').value };
+    if (r.m === 'moderation') Object.assign(o, { w: r.w, center: $('oCenter').value, probe: $('oProbe').value });
+    else Object.assign(o, { meds: r.meds, boot: $('oBoot').value, seed: String(Number($('oSeed').value) >>> 0) });
+    return JSON.stringify(o);
+  }
+  function currentStatus() {
+    if (state.running) return 'running';
+    const sig = analysisSig();
+    if (state.lastError && state.lastError.sig === sig) return 'failed';
+    if (state.success && state.success.sig === sig) return 'current';
+    if (state.success) return 'stale';
+    return state.lastError ? 'failed' : 'idle';
+  }
+  // 상태에 맞춰 안내 문구·복사·저장 가능 여부를 갱신함
+  function refreshStatus() {
+    const st = currentStatus(), box = $('results');
+    // 실패 후 입력을 바꾸면 그 오류는 현재 입력에 대한 것이 아니므로 지움
+    if (state.lastError && st !== 'failed' && st !== 'running') { state.lastError = null; msg('runMsg', ''); }
+    box.classList.toggle('is-stale', st === 'stale' || st === 'failed');
+    box.classList.toggle('is-running', st === 'running');
+    const banner = $('statusBanner');
+    if (banner) {
+      if (st === 'stale') { banner.className = 'msg notice'; banner.innerHTML = '<b>입력이 변경되었습니다.</b> 아래는 마지막으로 성공한 분석 결과입니다. 현재 설정을 반영하려면 다시 분석해 주세요.'; banner.hidden = false; }
+      else if (st === 'failed') { banner.className = 'msg fail'; banner.innerHTML = '<b>분석에 실패했습니다.</b> 아래는 이전 분석 결과이며, 현재 입력에 대한 결과가 아닙니다.'; banner.hidden = false; }
+      else if (st === 'running') { banner.className = 'msg notice'; banner.innerHTML = '<b>분석 중입니다.</b> 계산이 끝나면 결과가 바뀝니다.'; banner.hidden = false; }
+      else banner.hidden = true;
+    }
+    const usable = st === 'current';
+    box.querySelectorAll('button').forEach(b => { b.disabled = !usable; b.title = usable ? '' : '현재 입력으로 다시 분석한 뒤 사용할 수 있습니다'; });
+    box.querySelectorAll('.paper').forEach(pp => pp.setAttribute('contenteditable', usable ? 'true' : 'false'));
+    $('run').textContent = st === 'running' ? '계산 중…' : '분석 실행';
+    $('run').disabled = st === 'running';
+    box.dataset.status = st;
+  }
+  function fail(message, sig) {
+    state.lastError = { sig: sig || analysisSig(), message };
+    msg('runMsg', message, 'err');
+    refreshStatus();
+  }
+  $('run').addEventListener('click', () => {
+    if (!state.rows.length) return fail('먼저 데이터를 불러와 주세요.');
+    const r = roleVars();
+    if (!r.x || !r.y) return fail('X와 Y를 지정해 주세요.');
+    if (r.m === 'simple' && !r.meds[0]) return fail('매개변인 M을 지정해 주세요.');
+    if (r.m === 'serial' && r.meds.length < 2) return fail('순차매개는 매개변인 M1과 M2가 필요합니다.');
+    if (r.m === 'moderation' && !r.w) return fail('조절변인 W를 지정해 주세요.');
     const roles = [r.x, r.y].concat(r.m === 'moderation' ? [r.w] : r.meds);
-    if (r.covs.some(c => roles.includes(c))) return msg('runMsg', '공변인으로 선택한 변수가 다른 역할에도 지정되어 있습니다.', 'err');
-    $('run').disabled = true; $('run').textContent = '계산 중…'; msg('runMsg', '');
+    if (r.covs.some(c => roles.includes(c))) return fail('공변인으로 선택한 변수가 다른 역할에도 지정되어 있습니다.');
+    // 실행 시점의 입력을 고정해 두고 그 값으로만 계산함
+    const sig = analysisSig(), conf = Number($('oConf').value), mc = missingCodes();
+    const spec = r.m === 'moderation'
+      ? { x: r.x, w: r.w, y: r.y, covariates: r.covs, center: $('oCenter').value, probe: $('oProbe').value, conf, missingCodes: mc }
+      : { x: r.x, mediators: r.meds, y: r.y, covariates: r.covs, boot: Number($('oBoot').value), seed: Number($('oSeed').value) >>> 0, conf, missingCodes: mc };
+    const inputs = {
+      파일: state.fileName, 결측치코드: mc.slice(), 모형: Report.MODEL_INFO[r.m === 'moderation' ? 'moderation' : r.m].title,
+      문항점수: JSON.parse(JSON.stringify(state.scales.filter(sc => [r.x, r.y, r.w].concat(r.meds, r.covs).includes(sc.name))))
+    };
+    state.running = true; msg('runMsg', ''); refreshStatus();
     setTimeout(() => {
       try {
-        const conf = Number($('oConf').value), mc = missingCodes();
-        let res;
-        if (r.m === 'moderation') res = Engine.moderation(state.rows, { x: r.x, w: r.w, y: r.y, covariates: r.covs, center: $('oCenter').value, probe: $('oProbe').value, conf, missingCodes: mc });
-        else res = Engine.mediation(state.rows, { x: r.x, mediators: r.meds, y: r.y, covariates: r.covs, boot: Number($('oBoot').value), seed: Number($('oSeed').value) >>> 0, conf, missingCodes: mc });
-        state.last = res;
-        renderResults(res);
+        const res = r.m === 'moderation' ? Engine.moderation(state.rows, spec) : Engine.mediation(state.rows, spec);
+        const view = buildView(res, opts()); // 표·문장 생성까지 성공해야 결과를 교체함
+        state.success = { sig, res, inputs, at: new Date().toISOString() };
+        state.view = view; state.lastError = null; state.running = false;
+        renderResults();
         if (window.matchMedia('(max-width: 900px)').matches) $('results').scrollIntoView({ behavior: 'smooth' });
-      } catch (err) { msg('runMsg', err.message, 'err'); }
-      $('run').disabled = false; $('run').textContent = '분석 실행';
+      } catch (err) { state.running = false; fail(err.message, sig); }
+      refreshStatus();
     }, 30);
   });
+  // 입력 변경 감지: 계산에 영향을 주는 값은 재분석 필요로, 출력 설정은 즉시 다시 그림
+  const OUTPUT_IDS = ['oDec', 'oDecInd', 'oTool'];
+  let rerenderT = null;
+  function scheduleRerender() {
+    clearTimeout(rerenderT);
+    rerenderT = setTimeout(flushRerender, 250);
+  }
+  function flushRerender() {
+    if (rerenderT === null) return;
+    clearTimeout(rerenderT); rerenderT = null;
+    if (!state.success) return;
+    try { state.view = buildView(state.success.res, opts()); renderResults(); }
+    catch (err) { toast('출력을 다시 만들지 못했습니다: ' + err.message); }
+  }
+  function onStepInput(e) {
+    const t = e.target;
+    if (OUTPUT_IDS.includes(t.id) || (t.dataset && t.dataset.var)) { if (t.dataset && t.dataset.var) state.labels[t.dataset.var] = t.value.trim() || t.dataset.var; scheduleRerender(); return; }
+    if (t.closest && t.closest('#scoring') && t.id !== 'scName') return; // 문항 점수는 '점수 변수 만들기'를 눌러야 데이터가 바뀜
+    refreshStatus();
+  }
+  document.querySelector('.steps').addEventListener('change', onStepInput);
+  document.querySelector('.steps').addEventListener('input', onStepInput);
 
   // ---------- 결과 화면 ----------
   function opts() { return { labels: Object.assign({}, state.labels), dec: Number($('oDec').value), decInd: Number($('oDecInd').value), toolName: $('oTool').value.trim() || '웹 기반 분석 도구' }; }
-  function renderResults(res) {
-    const o = opts(), info = Report.MODEL_INFO[res.model];
-    const method = Report.methodText(res, o), text = Report.resultText(res, o), tabs = Report.tables(res, o), figs = Report.figures(res, o);
-    state.view = { method, text, tabs, figs, o };
+  // 계산 결과 + 출력 설정 → 화면·복사·저장에 모두 쓰는 한 벌의 출력물
+  function buildView(res, o) {
+    return { method: Report.methodText(res, o), text: Report.resultText(res, o), tabs: Report.tables(res, o), figs: Report.figures(res, o), o };
+  }
+  function renderResults() {
+    const res = state.success.res, v = state.view, info = Report.MODEL_INFO[res.model];
+    const { method, text, tabs, figs } = v;
     const s = res.spec;
     const setLines = [
       `모형: ${info.title} (Hayes 모형 번호 기준 ${info.hayes}에 해당하는 구조)`,
@@ -1279,8 +1434,10 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     ];
     if (s.boot) setLines.push(`간접효과 = 사례 재표집 부트스트랩 ${s.boot}회, 시드 ${s.seed}, 백분위수 구간` + (res.bootFailed ? ` (계산 불가 표본 ${res.bootFailed}개 다시 뽑음)` : ''));
     if (res.model === 'moderation') setLines.push(`상호작용항 = ${s.center === 'mean' ? 'X, W 평균중심화 후 곱' : '원점수 곱'}, 조건부 효과 지점 = ${s.probe === 'binary' ? 'W의 두 값' : s.probe === 'meansd' ? '평균 ±1SD' : '16·50·84 백분위'}`);
+    if (res.model === 'moderation') setLines.push(`Johnson-Neyman = ${({ all_sig: '계산함 (관측 범위 전체 유의)', none_sig: '계산함 (관측 범위 전체 비유의)', changes: '계산함 (관측 범위 안에서 유의성 바뀜)', failed: '계산 불가 (' + (res.jn.reason || '') + ')', not_applicable: '적용 안 함 (W가 두 값)' })[res.jn.status]}`);
     const warn = (res.warnings || []).map(w => `<div class="msg err">${esc(w)}</div>`).join('');
     $('results').innerHTML = `
+      <div id="statusBanner" role="status" hidden></div>
       ${warn}
       <section class="rcard">
         <div class="rhead"><h3>분석 방법</h3><div class="btns"><button class="small" data-copy="method">문단 복사</button></div></div>
@@ -1295,7 +1452,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
       </section>
       ${tabs.map((t, i) => `
       <section class="rcard">
-        <div class="rhead"><h3>표 ${i + 1}</h3><div class="btns"><button class="small" data-copytab="${i}">표 복사 (워드·엑셀)</button><button class="small" data-csv="${i}">CSV 저장</button></div></div>
+        <div class="rhead"><h3>표 ${i + 1}${/^Johnson/.test(t.title) ? ' · Johnson-Neyman' : ''}</h3><div class="btns"><button class="small" data-copytab="${i}">표 복사 (워드·엑셀)</button><button class="small" data-csv="${i}">CSV 저장</button></div></div>
         <div class="tablewrap" id="tab${i}">${Report.tableToHTML(t, i)}</div>
       </section>`).join('')}
       ${figs.map((f, i) => `
@@ -1308,6 +1465,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
         <div class="btns"><button data-report>결과 보고서 (HTML, 워드에서 열기)</button><button data-settings>분석 설정 기록 (JSON)</button></div>
         <p class="hint">참고 문헌: ${esc(Report.HAYES_REF)}</p>
       </section>`;
+    refreshStatus();
   }
 
   // ---------- 복사·저장 ----------
@@ -1347,7 +1505,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
   }
   const paras = id => Array.from($(id).querySelectorAll('p')).map(p => p.innerText.trim()).filter(Boolean);
   const stamp = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
-  const modelKo = () => Report.MODEL_INFO[state.last.model].title;
+  const modelKo = () => Report.MODEL_INFO[state.success.res.model].title;
   function reportHTML() {
     const v = state.view;
     const body = `<h1>${esc(modelKo())} 분석 결과</h1><h2>분석 방법</h2>${paras('methodBox').map(p => `<p>${esc(p)}</p>`).join('')}<h2>결과</h2>${paras('textBox').map(p => `<p>${esc(p)}</p>`).join('')}` +
@@ -1356,7 +1514,9 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(modelKo())} 분석 결과</title><style>body{font-family:'Batang','Noto Serif KR',serif;max-width:800px;margin:24px auto;line-height:1.8;color:#000}table{border-collapse:collapse;margin:8px 0}caption{text-align:left}thead th{border-top:1.5px solid #000;border-bottom:1px solid #000;padding:4px 8px}td{padding:3px 8px;text-align:center}tbody tr:last-child td{border-bottom:1.5px solid #000}.tnote{font-size:13px}</style></head><body>${body}</body></html>`;
   }
   $('results').addEventListener('click', async e => {
-    const b = e.target.closest('button'); if (!b || !state.view) return;
+    const b = e.target.closest('button'); if (!b || !state.success) return;
+    flushRerender(); // 출력 설정 변경이 대기 중이면 먼저 반영
+    if (currentStatus() !== 'current') return toast('현재 입력으로 다시 분석한 뒤 복사·저장할 수 있습니다');
     const v = state.view, d = b.dataset;
     if (d.copy === 'method') return copyText(paras('methodBox').join('\n\n'));
     if (d.copy === 'text') return copyText(paras('textBox').join('\n\n'), paras('textBox').map(p => `<p>${esc(p)}</p>`).join(''));
@@ -1366,7 +1526,10 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     if (d.png != null) { try { return saveFile(`그림${+d.png + 1}_${stamp()}.png`, await svgToPng(v.figs[+d.png].svg), 'image/png'); } catch (err) { return toast(err.message); } }
     if ('report' in d) return saveFile(`${modelKo()}_결과_${stamp()}.html`, reportHTML(), 'text/html');
     if ('settings' in d) {
-      const rec = { 도구: '모형분석 결과작성기 (MVP)', 생성일: new Date().toISOString(), 파일: state.fileName, 결측치코드: missingCodes(), 문항점수: state.scales, 설정: state.last.spec, 변인이름: v.o.labels, 분석사례: state.last.sample };
+      const sc = state.success, res = sc.res;
+      const rec = Object.assign({ 도구: '모형분석 결과작성기 (MVP)', 분석시각: sc.at, 저장시각: new Date().toISOString() }, sc.inputs,
+        { 설정: res.spec, 분석사례: res.sample, 출력설정: { 변인이름: v.o.labels, 계수소수점: v.o.dec, 효과소수점: v.o.decInd, 도구이름: v.o.toolName } });
+      if (res.model === 'moderation') rec['Johnson-Neyman'] = res.jn;
       return saveFile(`분석설정_${stamp()}.json`, JSON.stringify(rec, null, 2), 'application/json');
     }
   });

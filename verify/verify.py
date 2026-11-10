@@ -99,7 +99,7 @@ def check_mod(key):
         for c, p in zip(e['conditional'], [.16, .5, .84]): close(c['w'], np.percentile(W, p*100, method='weibull'), f'{key} pct{p}')
     if sp['probe'] == 'meansd':
         for c, m in zip(e['conditional'], [-1, 0, 1]): close(c['w'], W.mean() + m*W.std(ddof=1), f'{key} meansd')
-    if e['jn']:
+    if e['jn'] and e['jn'].get('bounds') is not None:
         tc = stats.t.ppf(.975, res.df_resid)
         for bnd in e['jn']['bounds']:
             d2 = d.copy(); d2['W'] = W - bnd['w']; d2['XW'] = X*d2['W']

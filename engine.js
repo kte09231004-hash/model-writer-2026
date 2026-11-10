@@ -338,23 +338,52 @@
       return { label: probeLabels[i], w, wRaw: center === 'mean' ? w + mw : w, effect: eff, se, t, p: tPvalue(t, fit.df2), llci: eff - tc * se, ulci: eff + tc * se };
     });
 
-    // Johnson-Neyman 경계값
-    let jn = null;
-    if (wUniq.length > 2 && spec.jn !== false) {
-      const A = b3 * b3 - tc * tc * v33, Bq = 2 * (b1 * b3 - tc * tc * v13), C = b1 * b1 - tc * tc * v11;
+    // Johnson-Neyman: |b1 + b3·w| / SE(w) = t임계값 을 만족하는 w (조건부 효과 유의성이 바뀌는 지점)
+    // status: all_sig(관측 범위 전체 유의) / none_sig(전체 비유의) / changes(범위 안에서 바뀜)
+    //         / failed(수치 문제로 계산 불가) / not_applicable(W가 두 값뿐)
+    const toRaw = w => (center === 'mean' ? w + mw : w);
+    let jn;
+    if (wUniq.length <= 2) {
+      jn = { status: 'not_applicable', reason: '조절변인이 두 값만 가지므로 Johnson-Neyman 방법을 적용하지 않음', conf };
+    } else {
       const wmin = wUniq[0], wmax = wUniq[wUniq.length - 1];
-      let roots = [];
-      if (Math.abs(A) < 1e-14) { if (Math.abs(Bq) > 1e-14) roots = [-C / Bq]; }
-      else { const disc = Bq * Bq - 4 * A * C; if (disc >= 0) roots = [(-Bq - Math.sqrt(disc)) / (2 * A), (-Bq + Math.sqrt(disc)) / (2 * A)]; }
-      roots = roots.filter(r => r >= wmin && r <= wmax).sort((a, b) => a - b);
-      jn = roots.map(r => ({
-        w: r, wRaw: center === 'mean' ? r + mw : r,
-        pctBelow: 100 * W.filter(v => v < r).length / n,
-        pctAbove: 100 * W.filter(v => v > r).length / n
-      }));
-      // 관찰 범위의 양 끝에서 조건부 효과 유의 여부
-      const sigAt = w => { const e = b1 + b3 * w, s = Math.sqrt(v11 + 2 * w * v13 + w * w * v33); return Math.abs(e / s) >= tc; };
-      jn = { bounds: jn, sigAtMin: sigAt(wmin), sigAtMax: sigAt(wmax), wmin, wmax };
+      const base = { conf, tcrit: tc, df: fit.df2, scale: center === 'mean' ? 'centered' : 'raw', wmin, wmax, wminRaw: toRaw(wmin), wmaxRaw: toRaw(wmax) };
+      const seAt = w => Math.sqrt(v11 + 2 * w * v13 + w * w * v33);
+      const sigAt = w => Math.abs((b1 + b3 * w) / seAt(w)) >= tc;
+      try {
+        const A = b3 * b3 - tc * tc * v33, Bq = 2 * (b1 * b3 - tc * tc * v13), C = b1 * b1 - tc * tc * v11;
+        if (![A, Bq, C, v11, v13, v33].every(isFinite)) throw new Error('회귀계수 또는 공분산 값이 유한하지 않음');
+        let roots = [];
+        const scaleA = Math.max(b3 * b3, tc * tc * v33, 1e-300);
+        if (Math.abs(A) / scaleA < 1e-12) { if (Math.abs(Bq) > 1e-300) roots = [-C / Bq]; }
+        else {
+          const disc = Bq * Bq - 4 * A * C;
+          if (disc >= 0) { const sq = Math.sqrt(disc); roots = [(-Bq - sq) / (2 * A), (-Bq + sq) / (2 * A)]; }
+        }
+        if (!roots.every(isFinite)) throw new Error('경계값이 유한하지 않음');
+        roots.sort((a, b) => a - b);
+        const all = roots.map(r => ({
+          w: r, wRaw: toRaw(r), inRange: r >= wmin && r <= wmax,
+          pctBelow: 100 * W.filter(v => v < r).length / n,
+          pctAbove: 100 * W.filter(v => v > r).length / n
+        }));
+        const bounds = all.filter(b => b.inRange);
+        // 관측 범위를 경계값으로 나눈 구간별 유의 여부(구간 중앙에서 판정)
+        const cuts = [wmin].concat(bounds.map(b => b.w), [wmax]);
+        const segments = [];
+        for (let i = 0; i < cuts.length - 1; i++) {
+          const lo = cuts[i], hi = cuts[i + 1];
+          if (hi - lo <= 0) continue;
+          const sig = sigAt((lo + hi) / 2);
+          segments.push({ from: lo, to: hi, fromRaw: toRaw(lo), toRaw: toRaw(hi), sig, pct: 100 * W.filter(v => v >= lo && v <= hi).length / n });
+        }
+        if (!segments.length) throw new Error('관측 범위를 구간으로 나눌 수 없음');
+        const anySig = segments.some(s => s.sig), allSig = segments.every(s => s.sig);
+        const status = allSig ? 'all_sig' : !anySig ? 'none_sig' : 'changes';
+        jn = Object.assign(base, { status, roots: all, bounds, outside: all.filter(b => !b.inRange), segments, sigAtMin: sigAt(wmin), sigAtMax: sigAt(wmax) });
+      } catch (e) {
+        jn = Object.assign(base, { status: 'failed', reason: e.message, roots: [], bounds: [], outside: [], segments: [] });
+      }
     }
 
     // 단순기울기 그림용 예측값: X는 16·84번째 백분위(또는 M±1SD), 공변량은 평균

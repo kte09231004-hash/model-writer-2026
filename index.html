@@ -171,6 +171,14 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
 .caution b { color: var(--warn); font-weight: 600; }
 .caution ul { margin: 4px 0 0; padding-left: 18px; }
 .settings { font-family: var(--f-num); font-size: 12.5px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; background: var(--code-bg); padding: 12px 16px; border-radius: var(--r); margin: 0; max-width: 760px; }
+.msg.notice { background: var(--warn-soft); color: var(--ink); border-left: 3px solid var(--warn); }
+.msg.notice b, .msg.fail b { color: var(--warn); }
+.msg.fail { background: var(--warn-soft); color: var(--ink); border-left: 3px solid var(--warn); }
+#statusBanner { margin-bottom: 16px; font-size: 14px; line-height: 1.6; padding: 12px 16px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 8px); z-index: 5; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.results.is-stale > .rcard, .results.is-stale > .msg:not(#statusBanner) { opacity: .5; }
+.results.is-running > .rcard { opacity: .5; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+button:disabled:hover { border-color: var(--field-line); background: var(--surface); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 8px 16px; border-radius: var(--r); font-size: 13px; z-index: 20; }
 @media (max-width: 900px) { .results { padding: 24px 16px; } }
 @media (max-width: 480px) {
@@ -297,7 +305,9 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const state = { rows: [], cols: [], fileName: '', scales: [], labels: {}, last: null };
+  // success: 마지막 성공 분석의 묶음 {sig, res, inputs} — 새 분석이 성공할 때만 통째로 교체함
+  // lastError: 마지막 실패 {sig, message} / running: 계산 중 여부 / dataVersion: 데이터·문항점수 변경 횟수
+  const state = { rows: [], cols: [], fileName: '', scales: [], labels: {}, success: null, view: null, lastError: null, running: false, dataVersion: 0 };
 
   // ---------- 알림 ----------
   let toastT;
@@ -330,6 +340,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     const seen = {}; header = header.map(h => { if (seen[h]) { seen[h]++; return h + '_' + seen[h]; } seen[h] = 1; return h; });
     state.rows = matrix.slice(1).map(r => { const o = {}; header.forEach((h, i) => (o[h] = r[i] == null ? '' : String(r[i]))); return o; });
     state.cols = header; state.fileName = name; state.scales = []; state.labels = {};
+    state.dataVersion++;
     refreshData();
   }
   let xlsxLoading = null;
@@ -401,7 +412,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     $('covs').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
     $('scItems').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
     $('scRev').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
-    renderLabels(); renderScales();
+    renderLabels(); renderScales(); refreshStatus();
   }
   $('missing').addEventListener('change', refreshData);
 
@@ -418,6 +429,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     state.rows.forEach((r, i) => (r[name] = res.scores[i] === '' ? '' : String(res.scores[i])));
     state.cols.push(name);
     state.scales.push({ name, items, rev, min, max, method, alpha: res.alpha, n: res.nComplete, out: res.outOfRange });
+    state.dataVersion++;
     msg('scMsg', res.outOfRange ? `범위(${min}~${max})를 벗어난 응답 ${res.outOfRange}개가 있습니다. 원자료를 확인해 주세요.` : '', res.outOfRange ? 'err' : '');
     $('scName').value = '';
     refreshData(); toast(`${name} 변수를 만들었습니다`);
@@ -436,7 +448,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     $('lM1').textContent = m === 'serial' ? '매개변인 M1 (먼저)' : '매개변인 M';
     $('bootOpts').querySelectorAll('label')[0].hidden = $('bootOpts').querySelectorAll('label')[1].hidden = m === 'moderation';
     $('modOpts').hidden = m !== 'moderation';
-    renderLabels();
+    renderLabels(); refreshStatus();
   });
   function roleVars() {
     const m = model(), v = id => $(id).value;
@@ -450,43 +462,117 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     const uniq = Array.from(new Set(vars));
     $('labels').innerHTML = uniq.length ? uniq.map(v => `<code>${esc(v)}</code><input type="text" id="lab_${cssId(v)}" data-var="${esc(v)}" value="${esc(state.labels[v] || v)}">`).join('') : '<span class="hint" style="grid-column:1/-1">변수를 지정하면 여기에서 이름을 바꿀 수 있습니다.</span>';
   }
-  $('labels').addEventListener('input', e => { if (e.target.dataset.var) state.labels[e.target.dataset.var] = e.target.value.trim() || e.target.dataset.var; });
   ['vX', 'vY', 'vM1', 'vM2', 'vM3', 'vW'].forEach(id => $(id).addEventListener('change', renderLabels));
   $('covs').addEventListener('change', e => { e.target.closest('.chip').classList.toggle('on', e.target.checked); renderLabels(); });
   ['scItems', 'scRev'].forEach(id => $(id).addEventListener('change', e => e.target.closest('.chip').classList.toggle('on', e.target.checked)));
 
   // ---------- 실행 ----------
   function msg(id, t, kind) { $(id).innerHTML = t ? `<div class="msg ${kind || ''}">${esc(t)}</div>` : ''; }
-  $('run').addEventListener('click', () => {
-    if (!state.rows.length) return msg('runMsg', '먼저 데이터를 불러와 주세요.', 'err');
+  // 분석 결과에 영향을 주는 입력 전체를 하나의 문자열로 만듦 (같으면 같은 분석)
+  function analysisSig() {
     const r = roleVars();
-    if (!r.x || !r.y) return msg('runMsg', 'X와 Y를 지정해 주세요.', 'err');
-    if (r.m === 'simple' && !r.meds[0]) return msg('runMsg', '매개변인 M을 지정해 주세요.', 'err');
-    if (r.m === 'serial' && r.meds.length < 2) return msg('runMsg', '순차매개는 매개변인 M1과 M2가 필요합니다.', 'err');
-    if (r.m === 'moderation' && !r.w) return msg('runMsg', '조절변인 W를 지정해 주세요.', 'err');
+    const o = { dv: state.dataVersion, missing: missingCodes(), model: r.m, x: r.x, y: r.y, covs: r.covs.slice().sort(), conf: $('oConf').value };
+    if (r.m === 'moderation') Object.assign(o, { w: r.w, center: $('oCenter').value, probe: $('oProbe').value });
+    else Object.assign(o, { meds: r.meds, boot: $('oBoot').value, seed: String(Number($('oSeed').value) >>> 0) });
+    return JSON.stringify(o);
+  }
+  function currentStatus() {
+    if (state.running) return 'running';
+    const sig = analysisSig();
+    if (state.lastError && state.lastError.sig === sig) return 'failed';
+    if (state.success && state.success.sig === sig) return 'current';
+    if (state.success) return 'stale';
+    return state.lastError ? 'failed' : 'idle';
+  }
+  // 상태에 맞춰 안내 문구·복사·저장 가능 여부를 갱신함
+  function refreshStatus() {
+    const st = currentStatus(), box = $('results');
+    // 실패 후 입력을 바꾸면 그 오류는 현재 입력에 대한 것이 아니므로 지움
+    if (state.lastError && st !== 'failed' && st !== 'running') { state.lastError = null; msg('runMsg', ''); }
+    box.classList.toggle('is-stale', st === 'stale' || st === 'failed');
+    box.classList.toggle('is-running', st === 'running');
+    const banner = $('statusBanner');
+    if (banner) {
+      if (st === 'stale') { banner.className = 'msg notice'; banner.innerHTML = '<b>입력이 변경되었습니다.</b> 아래는 마지막으로 성공한 분석 결과입니다. 현재 설정을 반영하려면 다시 분석해 주세요.'; banner.hidden = false; }
+      else if (st === 'failed') { banner.className = 'msg fail'; banner.innerHTML = '<b>분석에 실패했습니다.</b> 아래는 이전 분석 결과이며, 현재 입력에 대한 결과가 아닙니다.'; banner.hidden = false; }
+      else if (st === 'running') { banner.className = 'msg notice'; banner.innerHTML = '<b>분석 중입니다.</b> 계산이 끝나면 결과가 바뀝니다.'; banner.hidden = false; }
+      else banner.hidden = true;
+    }
+    const usable = st === 'current';
+    box.querySelectorAll('button').forEach(b => { b.disabled = !usable; b.title = usable ? '' : '현재 입력으로 다시 분석한 뒤 사용할 수 있습니다'; });
+    box.querySelectorAll('.paper').forEach(pp => pp.setAttribute('contenteditable', usable ? 'true' : 'false'));
+    $('run').textContent = st === 'running' ? '계산 중…' : '분석 실행';
+    $('run').disabled = st === 'running';
+    box.dataset.status = st;
+  }
+  function fail(message, sig) {
+    state.lastError = { sig: sig || analysisSig(), message };
+    msg('runMsg', message, 'err');
+    refreshStatus();
+  }
+  $('run').addEventListener('click', () => {
+    if (!state.rows.length) return fail('먼저 데이터를 불러와 주세요.');
+    const r = roleVars();
+    if (!r.x || !r.y) return fail('X와 Y를 지정해 주세요.');
+    if (r.m === 'simple' && !r.meds[0]) return fail('매개변인 M을 지정해 주세요.');
+    if (r.m === 'serial' && r.meds.length < 2) return fail('순차매개는 매개변인 M1과 M2가 필요합니다.');
+    if (r.m === 'moderation' && !r.w) return fail('조절변인 W를 지정해 주세요.');
     const roles = [r.x, r.y].concat(r.m === 'moderation' ? [r.w] : r.meds);
-    if (r.covs.some(c => roles.includes(c))) return msg('runMsg', '공변인으로 선택한 변수가 다른 역할에도 지정되어 있습니다.', 'err');
-    $('run').disabled = true; $('run').textContent = '계산 중…'; msg('runMsg', '');
+    if (r.covs.some(c => roles.includes(c))) return fail('공변인으로 선택한 변수가 다른 역할에도 지정되어 있습니다.');
+    // 실행 시점의 입력을 고정해 두고 그 값으로만 계산함
+    const sig = analysisSig(), conf = Number($('oConf').value), mc = missingCodes();
+    const spec = r.m === 'moderation'
+      ? { x: r.x, w: r.w, y: r.y, covariates: r.covs, center: $('oCenter').value, probe: $('oProbe').value, conf, missingCodes: mc }
+      : { x: r.x, mediators: r.meds, y: r.y, covariates: r.covs, boot: Number($('oBoot').value), seed: Number($('oSeed').value) >>> 0, conf, missingCodes: mc };
+    const inputs = {
+      파일: state.fileName, 결측치코드: mc.slice(), 모형: Report.MODEL_INFO[r.m === 'moderation' ? 'moderation' : r.m].title,
+      문항점수: JSON.parse(JSON.stringify(state.scales.filter(sc => [r.x, r.y, r.w].concat(r.meds, r.covs).includes(sc.name))))
+    };
+    state.running = true; msg('runMsg', ''); refreshStatus();
     setTimeout(() => {
       try {
-        const conf = Number($('oConf').value), mc = missingCodes();
-        let res;
-        if (r.m === 'moderation') res = Engine.moderation(state.rows, { x: r.x, w: r.w, y: r.y, covariates: r.covs, center: $('oCenter').value, probe: $('oProbe').value, conf, missingCodes: mc });
-        else res = Engine.mediation(state.rows, { x: r.x, mediators: r.meds, y: r.y, covariates: r.covs, boot: Number($('oBoot').value), seed: Number($('oSeed').value) >>> 0, conf, missingCodes: mc });
-        state.last = res;
-        renderResults(res);
+        const res = r.m === 'moderation' ? Engine.moderation(state.rows, spec) : Engine.mediation(state.rows, spec);
+        const view = buildView(res, opts()); // 표·문장 생성까지 성공해야 결과를 교체함
+        state.success = { sig, res, inputs, at: new Date().toISOString() };
+        state.view = view; state.lastError = null; state.running = false;
+        renderResults();
         if (window.matchMedia('(max-width: 900px)').matches) $('results').scrollIntoView({ behavior: 'smooth' });
-      } catch (err) { msg('runMsg', err.message, 'err'); }
-      $('run').disabled = false; $('run').textContent = '분석 실행';
+      } catch (err) { state.running = false; fail(err.message, sig); }
+      refreshStatus();
     }, 30);
   });
+  // 입력 변경 감지: 계산에 영향을 주는 값은 재분석 필요로, 출력 설정은 즉시 다시 그림
+  const OUTPUT_IDS = ['oDec', 'oDecInd', 'oTool'];
+  let rerenderT = null;
+  function scheduleRerender() {
+    clearTimeout(rerenderT);
+    rerenderT = setTimeout(flushRerender, 250);
+  }
+  function flushRerender() {
+    if (rerenderT === null) return;
+    clearTimeout(rerenderT); rerenderT = null;
+    if (!state.success) return;
+    try { state.view = buildView(state.success.res, opts()); renderResults(); }
+    catch (err) { toast('출력을 다시 만들지 못했습니다: ' + err.message); }
+  }
+  function onStepInput(e) {
+    const t = e.target;
+    if (OUTPUT_IDS.includes(t.id) || (t.dataset && t.dataset.var)) { if (t.dataset && t.dataset.var) state.labels[t.dataset.var] = t.value.trim() || t.dataset.var; scheduleRerender(); return; }
+    if (t.closest && t.closest('#scoring') && t.id !== 'scName') return; // 문항 점수는 '점수 변수 만들기'를 눌러야 데이터가 바뀜
+    refreshStatus();
+  }
+  document.querySelector('.steps').addEventListener('change', onStepInput);
+  document.querySelector('.steps').addEventListener('input', onStepInput);
 
   // ---------- 결과 화면 ----------
   function opts() { return { labels: Object.assign({}, state.labels), dec: Number($('oDec').value), decInd: Number($('oDecInd').value), toolName: $('oTool').value.trim() || '웹 기반 분석 도구' }; }
-  function renderResults(res) {
-    const o = opts(), info = Report.MODEL_INFO[res.model];
-    const method = Report.methodText(res, o), text = Report.resultText(res, o), tabs = Report.tables(res, o), figs = Report.figures(res, o);
-    state.view = { method, text, tabs, figs, o };
+  // 계산 결과 + 출력 설정 → 화면·복사·저장에 모두 쓰는 한 벌의 출력물
+  function buildView(res, o) {
+    return { method: Report.methodText(res, o), text: Report.resultText(res, o), tabs: Report.tables(res, o), figs: Report.figures(res, o), o };
+  }
+  function renderResults() {
+    const res = state.success.res, v = state.view, info = Report.MODEL_INFO[res.model];
+    const { method, text, tabs, figs } = v;
     const s = res.spec;
     const setLines = [
       `모형: ${info.title} (Hayes 모형 번호 기준 ${info.hayes}에 해당하는 구조)`,
@@ -497,8 +583,10 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     ];
     if (s.boot) setLines.push(`간접효과 = 사례 재표집 부트스트랩 ${s.boot}회, 시드 ${s.seed}, 백분위수 구간` + (res.bootFailed ? ` (계산 불가 표본 ${res.bootFailed}개 다시 뽑음)` : ''));
     if (res.model === 'moderation') setLines.push(`상호작용항 = ${s.center === 'mean' ? 'X, W 평균중심화 후 곱' : '원점수 곱'}, 조건부 효과 지점 = ${s.probe === 'binary' ? 'W의 두 값' : s.probe === 'meansd' ? '평균 ±1SD' : '16·50·84 백분위'}`);
+    if (res.model === 'moderation') setLines.push(`Johnson-Neyman = ${({ all_sig: '계산함 (관측 범위 전체 유의)', none_sig: '계산함 (관측 범위 전체 비유의)', changes: '계산함 (관측 범위 안에서 유의성 바뀜)', failed: '계산 불가 (' + (res.jn.reason || '') + ')', not_applicable: '적용 안 함 (W가 두 값)' })[res.jn.status]}`);
     const warn = (res.warnings || []).map(w => `<div class="msg err">${esc(w)}</div>`).join('');
     $('results').innerHTML = `
+      <div id="statusBanner" role="status" hidden></div>
       ${warn}
       <section class="rcard">
         <div class="rhead"><h3>분석 방법</h3><div class="btns"><button class="small" data-copy="method">문단 복사</button></div></div>
@@ -513,7 +601,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
       </section>
       ${tabs.map((t, i) => `
       <section class="rcard">
-        <div class="rhead"><h3>표 ${i + 1}</h3><div class="btns"><button class="small" data-copytab="${i}">표 복사 (워드·엑셀)</button><button class="small" data-csv="${i}">CSV 저장</button></div></div>
+        <div class="rhead"><h3>표 ${i + 1}${/^Johnson/.test(t.title) ? ' · Johnson-Neyman' : ''}</h3><div class="btns"><button class="small" data-copytab="${i}">표 복사 (워드·엑셀)</button><button class="small" data-csv="${i}">CSV 저장</button></div></div>
         <div class="tablewrap" id="tab${i}">${Report.tableToHTML(t, i)}</div>
       </section>`).join('')}
       ${figs.map((f, i) => `
@@ -526,6 +614,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
         <div class="btns"><button data-report>결과 보고서 (HTML, 워드에서 열기)</button><button data-settings>분석 설정 기록 (JSON)</button></div>
         <p class="hint">참고 문헌: ${esc(Report.HAYES_REF)}</p>
       </section>`;
+    refreshStatus();
   }
 
   // ---------- 복사·저장 ----------
@@ -565,7 +654,7 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
   }
   const paras = id => Array.from($(id).querySelectorAll('p')).map(p => p.innerText.trim()).filter(Boolean);
   const stamp = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
-  const modelKo = () => Report.MODEL_INFO[state.last.model].title;
+  const modelKo = () => Report.MODEL_INFO[state.success.res.model].title;
   function reportHTML() {
     const v = state.view;
     const body = `<h1>${esc(modelKo())} 분석 결과</h1><h2>분석 방법</h2>${paras('methodBox').map(p => `<p>${esc(p)}</p>`).join('')}<h2>결과</h2>${paras('textBox').map(p => `<p>${esc(p)}</p>`).join('')}` +
@@ -574,7 +663,9 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(modelKo())} 분석 결과</title><style>body{font-family:'Batang','Noto Serif KR',serif;max-width:800px;margin:24px auto;line-height:1.8;color:#000}table{border-collapse:collapse;margin:8px 0}caption{text-align:left}thead th{border-top:1.5px solid #000;border-bottom:1px solid #000;padding:4px 8px}td{padding:3px 8px;text-align:center}tbody tr:last-child td{border-bottom:1.5px solid #000}.tnote{font-size:13px}</style></head><body>${body}</body></html>`;
   }
   $('results').addEventListener('click', async e => {
-    const b = e.target.closest('button'); if (!b || !state.view) return;
+    const b = e.target.closest('button'); if (!b || !state.success) return;
+    flushRerender(); // 출력 설정 변경이 대기 중이면 먼저 반영
+    if (currentStatus() !== 'current') return toast('현재 입력으로 다시 분석한 뒤 복사·저장할 수 있습니다');
     const v = state.view, d = b.dataset;
     if (d.copy === 'method') return copyText(paras('methodBox').join('\n\n'));
     if (d.copy === 'text') return copyText(paras('textBox').join('\n\n'), paras('textBox').map(p => `<p>${esc(p)}</p>`).join(''));
@@ -584,7 +675,10 @@ p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 
     if (d.png != null) { try { return saveFile(`그림${+d.png + 1}_${stamp()}.png`, await svgToPng(v.figs[+d.png].svg), 'image/png'); } catch (err) { return toast(err.message); } }
     if ('report' in d) return saveFile(`${modelKo()}_결과_${stamp()}.html`, reportHTML(), 'text/html');
     if ('settings' in d) {
-      const rec = { 도구: '모형분석 결과작성기 (MVP)', 생성일: new Date().toISOString(), 파일: state.fileName, 결측치코드: missingCodes(), 문항점수: state.scales, 설정: state.last.spec, 변인이름: v.o.labels, 분석사례: state.last.sample };
+      const sc = state.success, res = sc.res;
+      const rec = Object.assign({ 도구: '모형분석 결과작성기 (MVP)', 분석시각: sc.at, 저장시각: new Date().toISOString() }, sc.inputs,
+        { 설정: res.spec, 분석사례: res.sample, 출력설정: { 변인이름: v.o.labels, 계수소수점: v.o.dec, 효과소수점: v.o.decInd, 도구이름: v.o.toolName } });
+      if (res.model === 'moderation') rec['Johnson-Neyman'] = res.jn;
       return saveFile(`분석설정_${stamp()}.json`, JSON.stringify(rec, null, 2), 'application/json');
     }
   });
