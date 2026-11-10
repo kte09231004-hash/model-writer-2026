@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>모형분석 결과작성기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 레이아웃: 왼쪽 설정(데이터→문항 점수→모형→변수→옵션)은 한 바탕 위의 그룹, 오른쪽 결과는 하나의 흰 작업면. 좁은 화면에서는 위아래로 쌓음.
+   간격 체계: 4·8·12·16·24·32px */
+:root {
+  --bg: #F7F7F5; --surface: #FFFFFF; --field: #FFFFFF;
+  --ink: #242629; --ink-2: #3A3D42; --muted: #62666D;
+  --line: #E6E7E9; --field-line: #C9CCD1; --field-line-hover: #A9ADB4;
+  --accent: #1D5C86; --accent-ink: #FFFFFF; --accent-hover: #174D71; --accent-soft: #EAF1F6;
+  --ok: #23704A; --ok-soft: #E3F2EA; --warn: #9A5200; --warn-soft: #FBEFE0;
+  --doc-ink: #1C1D1F; --rule: #242629; --code-bg: #F7F7F5;
+  --fig-bg: #FFFFFF;
+  --f-ui: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --f-doc: 'Noto Serif KR', 'Batang', 'AppleMyungjo', serif;
+  --f-num: 'IBM Plex Mono', ui-monospace, 'Consolas', monospace;
+  --r: 6px; --r-lg: 8px; --h: 38px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #151618; --surface: #1D1E21; --field: #232428;
+  --ink: #E6E7E9; --ink-2: #CFD1D5; --muted: #A2A6AD;
+  --line: #2D2F33; --field-line: #474A50; --field-line-hover: #5E626A;
+  --accent: #7DB6DE; --accent-ink: #0C1822; --accent-hover: #98C6E6; --accent-soft: #1E3242;
+  --ok: #6FCF9B; --ok-soft: #173326; --warn: #F0B062; --warn-soft: #3A2A14;
+  --doc-ink: #E6E7E9; --rule: #C9CCD1; --code-bg: #232428; --fig-bg: #FFFFFF; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #151618; --surface: #1D1E21; --field: #232428;
+  --ink: #E6E7E9; --ink-2: #CFD1D5; --muted: #A2A6AD;
+  --line: #2D2F33; --field-line: #474A50; --field-line-hover: #5E626A;
+  --accent: #7DB6DE; --accent-ink: #0C1822; --accent-hover: #98C6E6; --accent-soft: #1E3242;
+  --ok: #6FCF9B; --ok-soft: #173326; --warn: #F0B062; --warn-soft: #3A2A14;
+  --doc-ink: #E6E7E9; --rule: #C9CCD1; --code-bg: #232428; --fig-bg: #FFFFFF; color-scheme: dark }
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-ui); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1360px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; }
+
+/* 머리말 */
+header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 24px; }
+header.top h1 { font-size: 22px; line-height: 1.3; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+header.top p { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: 13px; }
+.badge { font-size: 12px; line-height: 1; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); font-weight: 500; background: var(--surface); }
+
+.layout { display: grid; grid-template-columns: minmax(0, 384px) minmax(0, 1fr); gap: 32px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+/* 왼쪽 설정: 카드 대신 같은 바탕 위의 그룹 + 구분선 */
+.steps { display: flex; flex-direction: column; }
+.step { display: flex; flex-direction: column; gap: 16px; min-width: 0; padding-block: 24px; }
+.step:first-child { padding-top: 0; }
+.step + .step { border-top: 1px solid var(--line); }
+.step h2, details.scoring summary { font-size: 15px; line-height: 1.4; margin: 0; display: flex; gap: 8px; align-items: baseline; font-weight: 600; color: var(--ink); }
+.step h2 .n { font-family: var(--f-num); font-size: 13px; font-weight: 500; color: var(--muted); min-width: 12px; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; }
+label.f, div.f { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+label.f > span, .flabel { font-size: 13px; font-weight: 500; color: var(--ink-2); line-height: 1.4; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+
+/* 입력창 */
+select, input[type=text], input[type=number] {
+  font: inherit; font-size: 14px; color: var(--ink); background: var(--field); border: 1px solid var(--field-line); border-radius: var(--r);
+  height: var(--h); padding: 0 12px; width: 100%; min-width: 0; text-overflow: ellipsis; }
+select { padding-right: 28px; }
+select:hover, input[type=text]:hover, input[type=number]:hover { border-color: var(--field-line-hover); }
+select:focus-visible, input[type=text]:focus-visible, input[type=number]:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input::placeholder { color: var(--muted); opacity: .8; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 12px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px 12px; }
+
+/* 버튼: 보조 버튼은 중립색, 분석 실행만 채움 */
+button { font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; border-radius: var(--r); border: 1px solid var(--field-line); background: var(--surface); color: var(--ink);
+  min-height: var(--h); padding: 0 14px; line-height: 1.3; white-space: nowrap; }
+button:hover { border-color: var(--field-line-hover); background: var(--bg); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.small { font-size: 14px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; min-height: 44px; font-size: 15px; width: 100%; }
+button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary:disabled { opacity: .55; cursor: progress; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* 파일 선택: 기본 입력을 유지하고 버튼 모양만 맞춤 */
+.filebox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.filebox input[type=file] { font: inherit; font-size: 13px; color: var(--muted); flex: 1 1 200px; min-width: 0; max-width: 100%; }
+.filebox input[type=file]::file-selector-button { font: inherit; font-size: 14px; font-weight: 500; height: var(--h); padding: 0 14px; margin-right: 12px; border: 1px solid var(--field-line); border-radius: var(--r); background: var(--surface); color: var(--ink); cursor: pointer; }
+.filebox input[type=file]::file-selector-button:hover { border-color: var(--field-line-hover); background: var(--bg); }
+.filebox input[type=file]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r); }
+
+.datainfo { font-size: 13px; color: var(--muted); }
+.datainfo:empty { display: none; }
+.datainfo b { color: var(--ink); font-weight: 600; }
+.scroll { overflow: auto; max-width: 100%; }
+.scroll:empty { display: none; }
+#preview { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+table.preview { border-collapse: collapse; font-size: 12.5px; font-family: var(--f-num); font-variant-numeric: tabular-nums; white-space: nowrap; width: 100%; }
+table.preview th, table.preview td { height: 28px; padding: 0 12px; text-align: right; border-bottom: 1px solid var(--line); }
+table.preview tr:last-child td { border-bottom: 0; }
+table.preview th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--surface); }
+
+/* 모형 선택: 선택한 하나만 옅은 남색 + 테두리, 라디오 표시로 색 외의 단서 제공 */
+.models { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mcard { position: relative; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 8px 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; background: var(--surface); text-align: center; }
+.mcard:hover { border-color: var(--field-line-hover); }
+.mcard input { position: absolute; top: 8px; left: 8px; margin: 0; width: 14px; height: 14px; accent-color: var(--accent); }
+.mcard svg { width: 100%; height: auto; max-width: 96px; color: var(--muted); }
+.mcard .t { font-size: 14px; font-weight: 500; color: var(--ink); }
+.mcard .s { font-size: 12px; color: var(--muted); }
+.mcard.on { border: 1.5px solid var(--accent); background: var(--accent-soft); padding: 11.5px 7.5px; }
+.mcard.on svg { color: var(--accent); }
+.mcard.on .t { font-weight: 600; }
+.mcard:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 선택 칩(공변인·문항) */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--field-line); border-radius: var(--r); height: 32px; padding: 0 10px; font-size: 13px; cursor: pointer; background: var(--surface); color: var(--ink); }
+.chip:hover { border-color: var(--field-line-hover); }
+.chip input { margin: 0; accent-color: var(--accent); }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.chip:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.labels { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+.labels code { font-family: var(--f-num); font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+details.scoring summary { cursor: pointer; list-style: none; }
+details.scoring summary::-webkit-details-marker { display: none; }
+details.scoring summary::before { content: '▸'; font-size: 12px; color: var(--muted); width: 12px; display: inline-block; transition: transform .12s; }
+details.scoring[open] summary::before { transform: rotate(90deg); }
+details.scoring[open] summary { margin-bottom: 16px; }
+details.scoring summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.scorelist { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.scorelist:empty { display: none; }
+.scorelist div { border: 1px solid var(--line); border-radius: var(--r); padding: 8px 12px; background: var(--surface); }
+.msg { font-size: 13px; border-radius: var(--r); padding: 8px 12px; }
+.msg.err { background: var(--warn-soft); color: var(--warn); }
+.msg.ok { background: var(--ok-soft); color: var(--ok); }
+#runMsg:empty, #scMsg:empty { display: none; }
+
+/* 오른쪽 결과: 하나의 흰 작업면, 섹션은 제목·여백·구분선으로만 구분 */
+.results { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 32px; min-width: 0; display: flex; flex-direction: column; }
+.results > .msg { margin-bottom: 16px; }
+.rcard { min-width: 0; display: flex; flex-direction: column; gap: 16px; padding-block: 32px; }
+.rcard:first-of-type { padding-top: 0; }
+.rcard:last-child { padding-bottom: 0; }
+.rcard + .rcard { border-top: 1px solid var(--line); }
+.rhead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
+.rhead h3 { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 600; color: var(--ink); }
+.empty { color: var(--muted); padding: 48px 16px; text-align: center; font-size: 14px; }
+.empty b { color: var(--ink); font-weight: 600; }
+.paper { color: var(--doc-ink); font-family: var(--f-doc); font-size: 16px; line-height: 1.8; max-width: 760px; border-radius: 4px; }
+.paper p { margin: 0 0 12px; text-indent: 1em; }
+.paper p:last-child { margin-bottom: 0; }
+.paper[contenteditable]:focus { outline: 2px solid var(--accent); outline-offset: 8px; }
+.paper[contenteditable]:hover:not(:focus) { background: var(--bg); box-shadow: 0 0 0 8px var(--bg); }
+.figbox { background: var(--fig-bg); border-radius: 4px; overflow-x: auto; }
+.figbox svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+/* APA 표: 가로선만 사용 */
+.tablewrap { color: var(--doc-ink); overflow-x: auto; }
+table.apa { border-collapse: collapse; font-family: var(--f-doc); font-size: 14px; font-variant-numeric: tabular-nums; min-width: 100%; color: var(--doc-ink); }
+table.apa caption { text-align: left; caption-side: top; padding-bottom: 8px; line-height: 1.6; }
+table.apa thead th { border-top: 1.5px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 6px 12px; font-weight: 600; text-align: right; white-space: nowrap; }
+table.apa td { padding: 4px 12px; height: 30px; text-align: right; white-space: nowrap; }
+table.apa thead th:first-child, table.apa thead th:nth-child(2), table.apa td:first-child, table.apa td:nth-child(2) { text-align: left; }
+table.apa tbody tr:last-child td { border-bottom: 1.5px solid var(--rule); }
+table.apa tr.fit td { font-size: 13px; color: var(--muted); padding-bottom: 8px; }
+p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 8px 0 0; color: var(--muted); }
+.caution { background: var(--warn-soft); color: var(--ink); border-radius: var(--r); padding: 12px 16px; font-size: 13px; max-width: 760px; }
+.caution b { color: var(--warn); font-weight: 600; }
+.caution ul { margin: 4px 0 0; padding-left: 18px; }
+.settings { font-family: var(--f-num); font-size: 12.5px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; background: var(--code-bg); padding: 12px 16px; border-radius: var(--r); margin: 0; max-width: 760px; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 8px 16px; border-radius: var(--r); font-size: 13px; z-index: 20; }
+@media (max-width: 900px) { .results { padding: 24px 16px; } }
+@media (max-width: 480px) {
+  .models { grid-template-columns: 1fr; }
+  .mcard { flex-direction: row; justify-content: flex-start; text-align: left; padding-left: 32px; gap: 12px; }
+  .mcard.on { padding-left: 31.5px; }
+  .mcard input { top: 50%; transform: translateY(-50%); left: 10px; }
+  .mcard svg { max-width: 80px; }
+  .row3 { grid-template-columns: 1fr 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) { button, .mcard, .chip, select, input { transition: border-color .12s, background-color .12s, box-shadow .12s; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <h1>모형분석 결과작성기</h1>
+    <span class="badge">MVP · 개발 중</span>
+    <p>데이터를 올리고 변수를 지정하면 매개·조절 분석의 결과표, 모형 그림, 결과 서술 초안까지 한 번에 만듭니다. 데이터는 이 브라우저 안에서만 계산되고 서버로 전송되지 않습니다.</p>
+  </header>
+
+  <div class="layout">
+    <div class="steps">
+      <section class="step" aria-labelledby="s1">
+        <h2 id="s1"><span class="n">1</span>데이터 불러오기</h2>
+        <div class="filebox">
+          <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+          <button class="small" id="loadSample">예시 데이터</button>
+        </div>
+        <p class="hint">CSV 또는 엑셀 파일. 첫 줄은 변수 이름이어야 합니다. SPSS 파일(.sav)은 SPSS에서 CSV로 저장해서 올려 주세요.</p>
+        <label class="f"><span>결측치 코드 (쉼표로 구분, 빈칸은 자동으로 결측)</span><input type="text" id="missing" placeholder="예: 999, -9"></label>
+        <div class="datainfo" id="dataInfo"></div>
+        <div class="scroll" id="preview" style="max-height:204px"></div>
+      </section>
+
+      <section class="step">
+        <details class="scoring" id="scoring">
+          <summary>(선택) 문항 점수 계산</summary>
+          <div class="stack">
+            <p class="hint">문항별 응답 자료일 때 사용합니다. 채점 기준은 척도 지침서를 확인해 직접 지정해 주세요. 문항이 하나라도 비어 있는 사례는 점수를 결측으로 둡니다.</p>
+            <label class="f"><span>새 변수 이름</span><input type="text" id="scName" placeholder="예: alex_mean"></label>
+            <div class="f"><span class="flabel">포함할 문항</span><div class="chips" id="scItems"></div></div>
+            <div class="f"><span class="flabel">역채점 문항</span><div class="chips" id="scRev"></div></div>
+            <div class="row3">
+              <label class="f"><span>최소 응답값</span><input type="number" id="scMin" value="1"></label>
+              <label class="f"><span>최대 응답값</span><input type="number" id="scMax" value="5"></label>
+              <label class="f"><span>계산 방식</span><select id="scMethod"><option value="mean">평균</option><option value="sum">합계</option></select></label>
+            </div>
+            <div class="btns"><button class="small" id="scAdd">점수 변수 만들기</button></div>
+            <div id="scMsg"></div>
+            <div class="scorelist" id="scList"></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="step" aria-labelledby="s2">
+        <h2 id="s2"><span class="n">2</span>분석 모형 선택</h2>
+        <div class="models" id="models">
+          <label class="mcard on"><input type="radio" name="model" value="simple" checked>
+            <svg viewBox="0 0 120 60" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="38" width="22" height="16"/><rect x="49" y="4" width="22" height="16"/><rect x="96" y="38" width="22" height="16"/><path d="M20 38 L50 20 M70 20 L100 38 M24 46 L94 46"/></g><g fill="currentColor" font-size="10" text-anchor="middle" font-family="sans-serif"><text x="13" y="50">X</text><text x="60" y="16">M</text><text x="107" y="50">Y</text></g></svg>
+            <span><span class="t">단순매개</span><br><span class="s">X → M → Y</span></span></label>
+          <label class="mcard"><input type="radio" name="model" value="serial">
+            <svg viewBox="0 0 120 60" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="38" width="22" height="16"/><rect x="28" y="4" width="24" height="16"/><rect x="68" y="4" width="24" height="16"/><rect x="96" y="38" width="22" height="16"/><path d="M16 38 L34 20 M52 12 L68 12 M86 20 L104 38 M24 46 L94 46"/></g><g fill="currentColor" font-size="10" text-anchor="middle" font-family="sans-serif"><text x="13" y="50">X</text><text x="40" y="16">M1</text><text x="80" y="16">M2</text><text x="107" y="50">Y</text></g></svg>
+            <span><span class="t">순차매개</span><br><span class="s">X → M1 → M2 → Y</span></span></label>
+          <label class="mcard"><input type="radio" name="model" value="moderation">
+            <svg viewBox="0 0 120 60" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="38" width="22" height="16"/><rect x="49" y="4" width="22" height="16"/><rect x="96" y="38" width="22" height="16"/><path d="M24 46 L94 46 M60 20 L60 44"/></g><g fill="currentColor" font-size="10" text-anchor="middle" font-family="sans-serif"><text x="13" y="50">X</text><text x="60" y="16">W</text><text x="107" y="50">Y</text></g></svg>
+            <span><span class="t">조절</span><br><span class="s">W가 X → Y를 조절</span></span></label>
+        </div>
+      </section>
+
+      <section class="step" aria-labelledby="s3">
+        <h2 id="s3"><span class="n">3</span>변수 역할 지정</h2>
+        <div class="row2">
+          <label class="f"><span>독립변인 X</span><select id="vX"></select></label>
+          <label class="f"><span>종속변인 Y</span><select id="vY"></select></label>
+        </div>
+        <div class="row2" id="medRow">
+          <label class="f" id="fM1"><span id="lM1">매개변인 M</span><select id="vM1"></select></label>
+          <label class="f" id="fM2"><span>매개변인 M2</span><select id="vM2"></select></label>
+          <label class="f" id="fM3"><span>매개변인 M3 (선택)</span><select id="vM3"></select></label>
+        </div>
+        <div class="row2" id="modRow" hidden>
+          <label class="f"><span>조절변인 W</span><select id="vW"></select></label>
+        </div>
+        <div class="f"><span class="flabel">공변인 (선택, 모든 회귀식에 투입)</span><div class="chips" id="covs"></div></div>
+        <div class="f">
+          <span class="flabel">논문에 쓸 변인 이름 (표·그림·문장에 사용)</span>
+          <div class="labels" id="labels"></div>
+        </div>
+      </section>
+
+      <section class="step" aria-labelledby="s4">
+        <h2 id="s4"><span class="n">4</span>분석 옵션</h2>
+        <div class="row3" id="bootOpts">
+          <label class="f"><span>부트스트랩 횟수</span><select id="oBoot"><option>1000</option><option selected>5000</option><option>10000</option></select></label>
+          <label class="f"><span>난수 시드</span><input type="number" id="oSeed" value="20261126"></label>
+          <label class="f"><span>신뢰수준</span><select id="oConf"><option value="0.90">90%</option><option value="0.95" selected>95%</option><option value="0.99">99%</option></select></label>
+        </div>
+        <div class="row2" id="modOpts" hidden>
+          <label class="f"><span>상호작용항 만들기</span><select id="oCenter"><option value="none">원점수 그대로</option><option value="mean">평균중심화</option></select></label>
+          <label class="f"><span>조건부 효과 산출 지점</span><select id="oProbe"><option value="percentile">16·50·84 백분위</option><option value="meansd">평균 ±1SD</option></select></label>
+        </div>
+        <div class="row2">
+          <label class="f"><span>계수 소수점</span><select id="oDec"><option selected>2</option><option>3</option></select></label>
+          <label class="f"><span>효과 소수점</span><select id="oDecInd"><option>2</option><option selected>3</option><option>4</option></select></label>
+        </div>
+        <label class="f"><span>분석 방법 문단에 적을 도구 이름</span><input type="text" id="oTool" value="웹 기반 분석 도구(모형분석 결과작성기)"></label>
+        <button class="primary" id="run">분석 실행</button>
+        <div id="runMsg"></div>
+      </section>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty" id="emptyState">왼쪽에서 데이터와 변수를 지정하고 <b>분석 실행</b>을 누르면 이곳에 결과가 나타납니다.</div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="engine.js"></script>
+<script src="report.js"></script>
+<script>
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const state = { rows: [], cols: [], fileName: '', scales: [], labels: {}, last: null };
+
+  // ---------- 알림 ----------
+  let toastT;
+  function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), 2200); }
+
+  // ---------- 파일 읽기 ----------
+  function parseDelimited(text) {
+    text = text.replace(/^﻿/, '');
+    const first = text.split(/\r?\n/, 1)[0];
+    const delim = [',', '\t', ';'].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+    const out = []; let row = [], field = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+      else if (c === '"') q = true;
+      else if (c === delim) { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(field); out.push(row); row = []; field = ''; }
+      else field += c;
+    }
+    if (field !== '' || row.length) { row.push(field); out.push(row); }
+    return out.filter(r => r.some(v => v.trim() !== ''));
+  }
+  function decode(buf) {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch (e) { return new TextDecoder('euc-kr').decode(buf); } // 한국어 엑셀 CSV(CP949)
+  }
+  function setTable(matrix, name) {
+    if (matrix.length < 2) throw new Error('변수 이름 줄과 자료가 최소 한 줄 이상 있어야 합니다.');
+    let header = matrix[0].map((h, i) => String(h).trim() || ('V' + (i + 1)));
+    const seen = {}; header = header.map(h => { if (seen[h]) { seen[h]++; return h + '_' + seen[h]; } seen[h] = 1; return h; });
+    state.rows = matrix.slice(1).map(r => { const o = {}; header.forEach((h, i) => (o[h] = r[i] == null ? '' : String(r[i]))); return o; });
+    state.cols = header; state.fileName = name; state.scales = []; state.labels = {};
+    refreshData();
+  }
+  let xlsxLoading = null;
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve();
+    if (!xlsxLoading) xlsxLoading = new Promise((res, rej) => {
+      const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload = res; s.onerror = () => rej(new Error('엑셀 읽기 도구를 불러오지 못했습니다. CSV로 저장해서 올려 주세요.')); document.head.appendChild(s);
+    });
+    return xlsxLoading;
+  }
+  $('file').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const buf = await f.arrayBuffer();
+      if (/\.xlsx?$/i.test(f.name)) {
+        await loadXLSX();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const m = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: true });
+        setTable(m, f.name);
+      } else setTable(parseDelimited(decode(buf)), f.name);
+      msg('runMsg', '');
+    } catch (err) { msg('runMsg', err.message, 'err'); }
+  });
+
+  // 예시 데이터: 가상 자료(실제 연구 자료 아님)
+  function sampleData() {
+    const rnd = Engine.mulberry32(20261109);
+    const norm = () => { let u = 0, v = 0; while (u === 0) u = rnd(); v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    const m = [['id', 'age', 'gender', 'alex', 'avoid', 'dysreg', 'support', 'distress']];
+    for (let i = 1; i <= 300; i++) {
+      const age = 19 + Math.floor(rnd() * 11), g = rnd() < .5 ? 0 : 1;
+      const X = 3 + .7 * norm(), M1 = 1 + .45 * X + .6 * norm(), M2 = .8 + .2 * X + .4 * M1 + .6 * norm(), W = 3.2 + .8 * norm();
+      const Y = .5 + .15 * X + .1 * M1 + .35 * M2 - .25 * W - .15 * (X - 3) * (W - 3.2) + .02 * (age - 24) + .6 * norm();
+      m.push([i, age, g, X.toFixed(3), M1.toFixed(3), M2.toFixed(3), W.toFixed(3), Y.toFixed(3)]);
+    }
+    m[5][4] = ''; m[121][7] = '';
+    return m;
+  }
+  const SAMPLE_LABELS = { alex: '감정표현불능증', avoid: '경험회피', dysreg: '정서조절곤란', distress: '심리적 고통', support: '사회적 지지', age: '연령', gender: '성별' };
+  function loadSample() {
+    setTable(sampleData(), '예시 데이터(가상 자료 300명)');
+    state.labels = Object.assign({}, SAMPLE_LABELS);
+    $('vX').value = 'alex'; $('vM1').value = 'avoid'; $('vM2').value = 'dysreg'; $('vY').value = 'distress'; $('vW').value = 'support';
+    renderLabels();
+  }
+  $('loadSample').addEventListener('click', () => { loadSample(); toast('예시 데이터를 불러왔습니다'); });
+
+  // ---------- 데이터 표시 ----------
+  function missingCodes() { return $('missing').value.split(',').map(t => t.trim()).filter(t => t !== '').map(Number).filter(v => isFinite(v)); }
+  function numericCols() {
+    const mc = missingCodes();
+    return state.cols.filter(c => {
+      let n = 0, bad = 0;
+      for (const r of state.rows) { const v = String(r[c]).trim(); if (v === '') continue; n++; if (!isFinite(Number(v))) bad++; }
+      return n > 0 && bad === 0;
+    });
+  }
+  function refreshData() {
+    const nc = numericCols();
+    const nonNum = state.cols.filter(c => !nc.includes(c));
+    $('dataInfo').innerHTML = state.rows.length
+      ? `<b>${esc(state.fileName)}</b> · 사례 <b>${state.rows.length}</b>명 · 변수 <b>${state.cols.length}</b>개` + (nonNum.length ? `<br>숫자가 아닌 값이 있어 분석에서 제외되는 변수: ${nonNum.map(esc).join(', ')}` : '')
+      : '';
+    const show = state.rows.slice(0, 8);
+    $('preview').innerHTML = state.rows.length ? `<table class="preview"><thead><tr>${state.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${show.map(r => `<tr>${state.cols.map(c => `<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '';
+    const opts = ['<option value="">— 선택 —</option>'].concat(nc.map(c => `<option value="${esc(c)}">${esc(c)}</option>`)).join('');
+    ['vX', 'vY', 'vM1', 'vM2', 'vM3', 'vW'].forEach(id => { const cur = $(id).value; $(id).innerHTML = opts; if (nc.includes(cur)) $(id).value = cur; });
+    $('covs').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
+    $('scItems').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
+    $('scRev').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
+    renderLabels(); renderScales();
+  }
+  $('missing').addEventListener('change', refreshData);
+
+  // ---------- 문항 점수 ----------
+  const checked = id => Array.from($(id).querySelectorAll('input:checked')).map(i => i.value);
+  $('scAdd').addEventListener('click', () => {
+    const name = $('scName').value.trim(), items = checked('scItems'), rev = checked('scRev').filter(r => items.includes(r));
+    const min = Number($('scMin').value), max = Number($('scMax').value), method = $('scMethod').value;
+    if (!name) return msg('scMsg', '새 변수 이름을 입력해 주세요.', 'err');
+    if (state.cols.includes(name)) return msg('scMsg', '이미 있는 변수 이름입니다.', 'err');
+    if (items.length < 1) return msg('scMsg', '포함할 문항을 선택해 주세요.', 'err');
+    if (!(max > min)) return msg('scMsg', '최대 응답값이 최소 응답값보다 커야 합니다.', 'err');
+    const res = Engine.scoreScale(state.rows, { name, items, reverse: rev, min, max, method }, missingCodes());
+    state.rows.forEach((r, i) => (r[name] = res.scores[i] === '' ? '' : String(res.scores[i])));
+    state.cols.push(name);
+    state.scales.push({ name, items, rev, min, max, method, alpha: res.alpha, n: res.nComplete, out: res.outOfRange });
+    msg('scMsg', res.outOfRange ? `범위(${min}~${max})를 벗어난 응답 ${res.outOfRange}개가 있습니다. 원자료를 확인해 주세요.` : '', res.outOfRange ? 'err' : '');
+    $('scName').value = '';
+    refreshData(); toast(`${name} 변수를 만들었습니다`);
+  });
+  function renderScales() {
+    $('scList').innerHTML = state.scales.map(s => `<div><b>${esc(s.name)}</b> = ${s.items.map(it => s.rev.includes(it) ? esc(it) + '(역)' : esc(it)).join(', ')}의 ${s.method === 'mean' ? '평균' : '합계'} · 역채점 = ${s.min}+${s.max}−응답 · 유효 ${s.n}명 · Cronbach α = ${s.alpha == null ? '—' : Report.num(s.alpha, 2)}</div>`).join('');
+  }
+
+  // ---------- 모형·변수 ----------
+  const model = () => document.querySelector('input[name=model]:checked').value;
+  $('models').addEventListener('change', () => {
+    document.querySelectorAll('.mcard').forEach(c => c.classList.toggle('on', c.querySelector('input').checked));
+    const m = model();
+    $('medRow').hidden = m === 'moderation'; $('modRow').hidden = m !== 'moderation';
+    $('fM2').hidden = $('fM3').hidden = m !== 'serial';
+    $('lM1').textContent = m === 'serial' ? '매개변인 M1 (먼저)' : '매개변인 M';
+    $('bootOpts').querySelectorAll('label')[0].hidden = $('bootOpts').querySelectorAll('label')[1].hidden = m === 'moderation';
+    $('modOpts').hidden = m !== 'moderation';
+    renderLabels();
+  });
+  function roleVars() {
+    const m = model(), v = id => $(id).value;
+    const meds = m === 'simple' ? [v('vM1')] : m === 'serial' ? [v('vM1'), v('vM2'), v('vM3')].filter(Boolean) : [];
+    const covs = checked('covs');
+    return { m, x: v('vX'), y: v('vY'), w: v('vW'), meds, covs };
+  }
+  function renderLabels() {
+    const r = roleVars();
+    const vars = [r.x].concat(r.m === 'moderation' ? [r.w] : r.meds, [r.y], r.covs).filter(Boolean);
+    const uniq = Array.from(new Set(vars));
+    $('labels').innerHTML = uniq.length ? uniq.map(v => `<code>${esc(v)}</code><input type="text" id="lab_${cssId(v)}" data-var="${esc(v)}" value="${esc(state.labels[v] || v)}">`).join('') : '<span class="hint" style="grid-column:1/-1">변수를 지정하면 여기에서 이름을 바꿀 수 있습니다.</span>';
+  }
+  $('labels').addEventListener('input', e => { if (e.target.dataset.var) state.labels[e.target.dataset.var] = e.target.value.trim() || e.target.dataset.var; });
+  ['vX', 'vY', 'vM1', 'vM2', 'vM3', 'vW'].forEach(id => $(id).addEventListener('change', renderLabels));
+  $('covs').addEventListener('change', e => { e.target.closest('.chip').classList.toggle('on', e.target.checked); renderLabels(); });
+  ['scItems', 'scRev'].forEach(id => $(id).addEventListener('change', e => e.target.closest('.chip').classList.toggle('on', e.target.checked)));
+
+  // ---------- 실행 ----------
+  function msg(id, t, kind) { $(id).innerHTML = t ? `<div class="msg ${kind || ''}">${esc(t)}</div>` : ''; }
+  $('run').addEventListener('click', () => {
+    if (!state.rows.length) return msg('runMsg', '먼저 데이터를 불러와 주세요.', 'err');
+    const r = roleVars();
+    if (!r.x || !r.y) return msg('runMsg', 'X와 Y를 지정해 주세요.', 'err');
+    if (r.m === 'simple' && !r.meds[0]) return msg('runMsg', '매개변인 M을 지정해 주세요.', 'err');
+    if (r.m === 'serial' && r.meds.length < 2) return msg('runMsg', '순차매개는 매개변인 M1과 M2가 필요합니다.', 'err');
+    if (r.m === 'moderation' && !r.w) return msg('runMsg', '조절변인 W를 지정해 주세요.', 'err');
+    const roles = [r.x, r.y].concat(r.m === 'moderation' ? [r.w] : r.meds);
+    if (r.covs.some(c => roles.includes(c))) return msg('runMsg', '공변인으로 선택한 변수가 다른 역할에도 지정되어 있습니다.', 'err');
+    $('run').disabled = true; $('run').textContent = '계산 중…'; msg('runMsg', '');
+    setTimeout(() => {
+      try {
+        const conf = Number($('oConf').value), mc = missingCodes();
+        let res;
+        if (r.m === 'moderation') res = Engine.moderation(state.rows, { x: r.x, w: r.w, y: r.y, covariates: r.covs, center: $('oCenter').value, probe: $('oProbe').value, conf, missingCodes: mc });
+        else res = Engine.mediation(state.rows, { x: r.x, mediators: r.meds, y: r.y, covariates: r.covs, boot: Number($('oBoot').value), seed: Number($('oSeed').value) >>> 0, conf, missingCodes: mc });
+        state.last = res;
+        renderResults(res);
+        if (window.matchMedia('(max-width: 900px)').matches) $('results').scrollIntoView({ behavior: 'smooth' });
+      } catch (err) { msg('runMsg', err.message, 'err'); }
+      $('run').disabled = false; $('run').textContent = '분석 실행';
+    }, 30);
+  });
+
+  // ---------- 결과 화면 ----------
+  function opts() { return { labels: Object.assign({}, state.labels), dec: Number($('oDec').value), decInd: Number($('oDecInd').value), toolName: $('oTool').value.trim() || '웹 기반 분석 도구' }; }
+  function renderResults(res) {
+    const o = opts(), info = Report.MODEL_INFO[res.model];
+    const method = Report.methodText(res, o), text = Report.resultText(res, o), tabs = Report.tables(res, o), figs = Report.figures(res, o);
+    state.view = { method, text, tabs, figs, o };
+    const s = res.spec;
+    const setLines = [
+      `모형: ${info.title} (Hayes 모형 번호 기준 ${info.hayes}에 해당하는 구조)`,
+      `X = ${s.x}` + (s.mediators ? `, 매개 = ${s.mediators.join(' → ')}` : `, W = ${s.w}`) + `, Y = ${s.y}`,
+      `공변인 = ${s.covariates.length ? s.covariates.join(', ') : '없음'}`,
+      `분석 사례 = ${res.sample.n}명 (전체 ${res.sample.nTotal}명 중 결측 ${res.sample.dropped}명 목록별 삭제)`,
+      `추정 = OLS 회귀, 일반 표준오차, 신뢰수준 ${Math.round(s.conf * 100)}%`
+    ];
+    if (s.boot) setLines.push(`간접효과 = 사례 재표집 부트스트랩 ${s.boot}회, 시드 ${s.seed}, 백분위수 구간` + (res.bootFailed ? ` (계산 불가 표본 ${res.bootFailed}개 다시 뽑음)` : ''));
+    if (res.model === 'moderation') setLines.push(`상호작용항 = ${s.center === 'mean' ? 'X, W 평균중심화 후 곱' : '원점수 곱'}, 조건부 효과 지점 = ${s.probe === 'binary' ? 'W의 두 값' : s.probe === 'meansd' ? '평균 ±1SD' : '16·50·84 백분위'}`);
+    const warn = (res.warnings || []).map(w => `<div class="msg err">${esc(w)}</div>`).join('');
+    $('results').innerHTML = `
+      ${warn}
+      <section class="rcard">
+        <div class="rhead"><h3>분석 방법</h3><div class="btns"><button class="small" data-copy="method">문단 복사</button></div></div>
+        <div class="paper" id="methodBox" contenteditable="true" spellcheck="false"><p>${esc(method)}</p></div>
+        <pre class="settings">${esc(setLines.join('\n'))}</pre>
+      </section>
+      <section class="rcard">
+        <div class="rhead"><h3>결과 서술 초안</h3><div class="btns"><button class="small" data-copy="text">문단 복사</button></div></div>
+        <p class="hint">숫자는 아래 표와 같은 계산값입니다. 문장은 바로 고칠 수 있고, 고친 내용이 복사됩니다.</p>
+        <div class="paper" id="textBox" contenteditable="true" spellcheck="false">${text.map(p => `<p>${esc(p)}</p>`).join('')}</div>
+        <div class="caution"><b>검토가 필요합니다</b><ul>${Report.CAUTION.map(c => `<li>${esc(c)}</li>`).join('')}</ul></div>
+      </section>
+      ${tabs.map((t, i) => `
+      <section class="rcard">
+        <div class="rhead"><h3>표 ${i + 1}</h3><div class="btns"><button class="small" data-copytab="${i}">표 복사 (워드·엑셀)</button><button class="small" data-csv="${i}">CSV 저장</button></div></div>
+        <div class="tablewrap" id="tab${i}">${Report.tableToHTML(t, i)}</div>
+      </section>`).join('')}
+      ${figs.map((f, i) => `
+      <section class="rcard">
+        <div class="rhead"><h3>${esc(f.title)}</h3><div class="btns"><button class="small" data-png="${i}">PNG 저장</button><button class="small" data-svg="${i}">SVG 저장</button></div></div>
+        <div class="figbox">${f.svg}</div>
+      </section>`).join('')}
+      <section class="rcard">
+        <div class="rhead"><h3>전체 저장</h3></div>
+        <div class="btns"><button data-report>결과 보고서 (HTML, 워드에서 열기)</button><button data-settings>분석 설정 기록 (JSON)</button></div>
+        <p class="hint">참고 문헌: ${esc(Report.HAYES_REF)}</p>
+      </section>`;
+  }
+
+  // ---------- 복사·저장 ----------
+  async function copyText(text, html) {
+    try {
+      if (html && window.ClipboardItem && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+      } else await navigator.clipboard.writeText(text);
+      toast('복사했습니다');
+    } catch (e) {
+      try { await navigator.clipboard.writeText(text); toast('복사했습니다'); }
+      catch (e2) { toast('자동 복사가 막혀 있습니다. 내용을 직접 선택해 복사해 주세요.'); }
+    }
+  }
+  let dlCap = null;
+  if (window.claude && typeof window.claude.use === 'function') window.claude.use('downloads').then(d => (dlCap = d)).catch(() => {});
+  async function saveFile(filename, data, mime) {
+    if (dlCap) {
+      try { await dlCap.save({ filename, data }); toast('저장했습니다'); return; }
+      catch (e) { if (e && e.code === 'declined') return; }
+    }
+    const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  function svgToPng(svg) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => {
+        const s = 3, c = document.createElement('canvas'); c.width = img.width * s; c.height = img.height * s;
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.scale(s, s); g.drawImage(img, 0, 0);
+        c.toBlob(b => (b ? res(b) : rej(new Error('PNG 변환 실패'))), 'image/png');
+      };
+      img.onerror = () => rej(new Error('그림 변환 실패'));
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    });
+  }
+  const paras = id => Array.from($(id).querySelectorAll('p')).map(p => p.innerText.trim()).filter(Boolean);
+  const stamp = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
+  const modelKo = () => Report.MODEL_INFO[state.last.model].title;
+  function reportHTML() {
+    const v = state.view;
+    const body = `<h1>${esc(modelKo())} 분석 결과</h1><h2>분석 방법</h2>${paras('methodBox').map(p => `<p>${esc(p)}</p>`).join('')}<h2>결과</h2>${paras('textBox').map(p => `<p>${esc(p)}</p>`).join('')}` +
+      v.tabs.map((t, i) => Report.tableToHTML(t, i)).join('<br>') + v.figs.map((f, i) => `<p><b>그림 ${i + 1}.</b> ${esc(f.title)}</p>${f.svg}`).join('') +
+      `<h2>검토 사항</h2><ul>${Report.CAUTION.map(c => `<li>${esc(c)}</li>`).join('')}</ul><p>${esc(Report.HAYES_REF)}</p>`;
+    return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(modelKo())} 분석 결과</title><style>body{font-family:'Batang','Noto Serif KR',serif;max-width:800px;margin:24px auto;line-height:1.8;color:#000}table{border-collapse:collapse;margin:8px 0}caption{text-align:left}thead th{border-top:1.5px solid #000;border-bottom:1px solid #000;padding:4px 8px}td{padding:3px 8px;text-align:center}tbody tr:last-child td{border-bottom:1.5px solid #000}.tnote{font-size:13px}</style></head><body>${body}</body></html>`;
+  }
+  $('results').addEventListener('click', async e => {
+    const b = e.target.closest('button'); if (!b || !state.view) return;
+    const v = state.view, d = b.dataset;
+    if (d.copy === 'method') return copyText(paras('methodBox').join('\n\n'));
+    if (d.copy === 'text') return copyText(paras('textBox').join('\n\n'), paras('textBox').map(p => `<p>${esc(p)}</p>`).join(''));
+    if (d.copytab != null) { const t = v.tabs[+d.copytab]; return copyText(Report.tableToTSV(t), Report.tableToHTML(t, +d.copytab).replace('<table class="apa">', '<table style="border-collapse:collapse;font-family:Batang,serif">')); }
+    if (d.csv != null) return saveFile(`표${+d.csv + 1}_${stamp()}.csv`, '﻿' + Report.tableToCSV(v.tabs[+d.csv]), 'text/csv');
+    if (d.svg != null) return saveFile(`그림${+d.svg + 1}_${stamp()}.svg`, v.figs[+d.svg].svg, 'image/svg+xml');
+    if (d.png != null) { try { return saveFile(`그림${+d.png + 1}_${stamp()}.png`, await svgToPng(v.figs[+d.png].svg), 'image/png'); } catch (err) { return toast(err.message); } }
+    if ('report' in d) return saveFile(`${modelKo()}_결과_${stamp()}.html`, reportHTML(), 'text/html');
+    if ('settings' in d) {
+      const rec = { 도구: '모형분석 결과작성기 (MVP)', 생성일: new Date().toISOString(), 파일: state.fileName, 결측치코드: missingCodes(), 문항점수: state.scales, 설정: state.last.spec, 변인이름: v.o.labels, 분석사례: state.last.sample };
+      return saveFile(`분석설정_${stamp()}.json`, JSON.stringify(rec, null, 2), 'application/json');
+    }
+  });
+
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function cssId(s) { return String(s).replace(/[^A-Za-z0-9_-]/g, c => '_' + c.charCodeAt(0)); }
+
+  // 처음 열면 예시 데이터로 순차매개 결과를 보여 줌
+  loadSample();
+  document.querySelector('input[value=serial]').checked = true;
+  $('models').dispatchEvent(new Event('change'));
+  $('run').click();
+})();
+</script>
+
+</body>
+</html>

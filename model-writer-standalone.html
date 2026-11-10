@@ -1,0 +1,1386 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>모형분석 결과작성기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 레이아웃: 왼쪽 설정(데이터→문항 점수→모형→변수→옵션)은 한 바탕 위의 그룹, 오른쪽 결과는 하나의 흰 작업면. 좁은 화면에서는 위아래로 쌓음.
+   간격 체계: 4·8·12·16·24·32px */
+:root {
+  --bg: #F7F7F5; --surface: #FFFFFF; --field: #FFFFFF;
+  --ink: #242629; --ink-2: #3A3D42; --muted: #62666D;
+  --line: #E6E7E9; --field-line: #C9CCD1; --field-line-hover: #A9ADB4;
+  --accent: #1D5C86; --accent-ink: #FFFFFF; --accent-hover: #174D71; --accent-soft: #EAF1F6;
+  --ok: #23704A; --ok-soft: #E3F2EA; --warn: #9A5200; --warn-soft: #FBEFE0;
+  --doc-ink: #1C1D1F; --rule: #242629; --code-bg: #F7F7F5;
+  --fig-bg: #FFFFFF;
+  --f-ui: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --f-doc: 'Noto Serif KR', 'Batang', 'AppleMyungjo', serif;
+  --f-num: 'IBM Plex Mono', ui-monospace, 'Consolas', monospace;
+  --r: 6px; --r-lg: 8px; --h: 38px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #151618; --surface: #1D1E21; --field: #232428;
+  --ink: #E6E7E9; --ink-2: #CFD1D5; --muted: #A2A6AD;
+  --line: #2D2F33; --field-line: #474A50; --field-line-hover: #5E626A;
+  --accent: #7DB6DE; --accent-ink: #0C1822; --accent-hover: #98C6E6; --accent-soft: #1E3242;
+  --ok: #6FCF9B; --ok-soft: #173326; --warn: #F0B062; --warn-soft: #3A2A14;
+  --doc-ink: #E6E7E9; --rule: #C9CCD1; --code-bg: #232428; --fig-bg: #FFFFFF; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #151618; --surface: #1D1E21; --field: #232428;
+  --ink: #E6E7E9; --ink-2: #CFD1D5; --muted: #A2A6AD;
+  --line: #2D2F33; --field-line: #474A50; --field-line-hover: #5E626A;
+  --accent: #7DB6DE; --accent-ink: #0C1822; --accent-hover: #98C6E6; --accent-soft: #1E3242;
+  --ok: #6FCF9B; --ok-soft: #173326; --warn: #F0B062; --warn-soft: #3A2A14;
+  --doc-ink: #E6E7E9; --rule: #C9CCD1; --code-bg: #232428; --fig-bg: #FFFFFF; color-scheme: dark }
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-ui); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1360px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; }
+
+/* 머리말 */
+header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 24px; }
+header.top h1 { font-size: 22px; line-height: 1.3; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+header.top p { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: 13px; }
+.badge { font-size: 12px; line-height: 1; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); font-weight: 500; background: var(--surface); }
+
+.layout { display: grid; grid-template-columns: minmax(0, 384px) minmax(0, 1fr); gap: 32px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+/* 왼쪽 설정: 카드 대신 같은 바탕 위의 그룹 + 구분선 */
+.steps { display: flex; flex-direction: column; }
+.step { display: flex; flex-direction: column; gap: 16px; min-width: 0; padding-block: 24px; }
+.step:first-child { padding-top: 0; }
+.step + .step { border-top: 1px solid var(--line); }
+.step h2, details.scoring summary { font-size: 15px; line-height: 1.4; margin: 0; display: flex; gap: 8px; align-items: baseline; font-weight: 600; color: var(--ink); }
+.step h2 .n { font-family: var(--f-num); font-size: 13px; font-weight: 500; color: var(--muted); min-width: 12px; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; }
+label.f, div.f { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+label.f > span, .flabel { font-size: 13px; font-weight: 500; color: var(--ink-2); line-height: 1.4; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+
+/* 입력창 */
+select, input[type=text], input[type=number] {
+  font: inherit; font-size: 14px; color: var(--ink); background: var(--field); border: 1px solid var(--field-line); border-radius: var(--r);
+  height: var(--h); padding: 0 12px; width: 100%; min-width: 0; text-overflow: ellipsis; }
+select { padding-right: 28px; }
+select:hover, input[type=text]:hover, input[type=number]:hover { border-color: var(--field-line-hover); }
+select:focus-visible, input[type=text]:focus-visible, input[type=number]:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input::placeholder { color: var(--muted); opacity: .8; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 12px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px 12px; }
+
+/* 버튼: 보조 버튼은 중립색, 분석 실행만 채움 */
+button { font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; border-radius: var(--r); border: 1px solid var(--field-line); background: var(--surface); color: var(--ink);
+  min-height: var(--h); padding: 0 14px; line-height: 1.3; white-space: nowrap; }
+button:hover { border-color: var(--field-line-hover); background: var(--bg); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.small { font-size: 14px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; min-height: 44px; font-size: 15px; width: 100%; }
+button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary:disabled { opacity: .55; cursor: progress; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* 파일 선택: 기본 입력을 유지하고 버튼 모양만 맞춤 */
+.filebox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.filebox input[type=file] { font: inherit; font-size: 13px; color: var(--muted); flex: 1 1 200px; min-width: 0; max-width: 100%; }
+.filebox input[type=file]::file-selector-button { font: inherit; font-size: 14px; font-weight: 500; height: var(--h); padding: 0 14px; margin-right: 12px; border: 1px solid var(--field-line); border-radius: var(--r); background: var(--surface); color: var(--ink); cursor: pointer; }
+.filebox input[type=file]::file-selector-button:hover { border-color: var(--field-line-hover); background: var(--bg); }
+.filebox input[type=file]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r); }
+
+.datainfo { font-size: 13px; color: var(--muted); }
+.datainfo:empty { display: none; }
+.datainfo b { color: var(--ink); font-weight: 600; }
+.scroll { overflow: auto; max-width: 100%; }
+.scroll:empty { display: none; }
+#preview { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+table.preview { border-collapse: collapse; font-size: 12.5px; font-family: var(--f-num); font-variant-numeric: tabular-nums; white-space: nowrap; width: 100%; }
+table.preview th, table.preview td { height: 28px; padding: 0 12px; text-align: right; border-bottom: 1px solid var(--line); }
+table.preview tr:last-child td { border-bottom: 0; }
+table.preview th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--surface); }
+
+/* 모형 선택: 선택한 하나만 옅은 남색 + 테두리, 라디오 표시로 색 외의 단서 제공 */
+.models { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mcard { position: relative; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 8px 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; background: var(--surface); text-align: center; }
+.mcard:hover { border-color: var(--field-line-hover); }
+.mcard input { position: absolute; top: 8px; left: 8px; margin: 0; width: 14px; height: 14px; accent-color: var(--accent); }
+.mcard svg { width: 100%; height: auto; max-width: 96px; color: var(--muted); }
+.mcard .t { font-size: 14px; font-weight: 500; color: var(--ink); }
+.mcard .s { font-size: 12px; color: var(--muted); }
+.mcard.on { border: 1.5px solid var(--accent); background: var(--accent-soft); padding: 11.5px 7.5px; }
+.mcard.on svg { color: var(--accent); }
+.mcard.on .t { font-weight: 600; }
+.mcard:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 선택 칩(공변인·문항) */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--field-line); border-radius: var(--r); height: 32px; padding: 0 10px; font-size: 13px; cursor: pointer; background: var(--surface); color: var(--ink); }
+.chip:hover { border-color: var(--field-line-hover); }
+.chip input { margin: 0; accent-color: var(--accent); }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.chip:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.labels { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+.labels code { font-family: var(--f-num); font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+details.scoring summary { cursor: pointer; list-style: none; }
+details.scoring summary::-webkit-details-marker { display: none; }
+details.scoring summary::before { content: '▸'; font-size: 12px; color: var(--muted); width: 12px; display: inline-block; transition: transform .12s; }
+details.scoring[open] summary::before { transform: rotate(90deg); }
+details.scoring[open] summary { margin-bottom: 16px; }
+details.scoring summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.scorelist { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.scorelist:empty { display: none; }
+.scorelist div { border: 1px solid var(--line); border-radius: var(--r); padding: 8px 12px; background: var(--surface); }
+.msg { font-size: 13px; border-radius: var(--r); padding: 8px 12px; }
+.msg.err { background: var(--warn-soft); color: var(--warn); }
+.msg.ok { background: var(--ok-soft); color: var(--ok); }
+#runMsg:empty, #scMsg:empty { display: none; }
+
+/* 오른쪽 결과: 하나의 흰 작업면, 섹션은 제목·여백·구분선으로만 구분 */
+.results { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 32px; min-width: 0; display: flex; flex-direction: column; }
+.results > .msg { margin-bottom: 16px; }
+.rcard { min-width: 0; display: flex; flex-direction: column; gap: 16px; padding-block: 32px; }
+.rcard:first-of-type { padding-top: 0; }
+.rcard:last-child { padding-bottom: 0; }
+.rcard + .rcard { border-top: 1px solid var(--line); }
+.rhead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
+.rhead h3 { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 600; color: var(--ink); }
+.empty { color: var(--muted); padding: 48px 16px; text-align: center; font-size: 14px; }
+.empty b { color: var(--ink); font-weight: 600; }
+.paper { color: var(--doc-ink); font-family: var(--f-doc); font-size: 16px; line-height: 1.8; max-width: 760px; border-radius: 4px; }
+.paper p { margin: 0 0 12px; text-indent: 1em; }
+.paper p:last-child { margin-bottom: 0; }
+.paper[contenteditable]:focus { outline: 2px solid var(--accent); outline-offset: 8px; }
+.paper[contenteditable]:hover:not(:focus) { background: var(--bg); box-shadow: 0 0 0 8px var(--bg); }
+.figbox { background: var(--fig-bg); border-radius: 4px; overflow-x: auto; }
+.figbox svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+/* APA 표: 가로선만 사용 */
+.tablewrap { color: var(--doc-ink); overflow-x: auto; }
+table.apa { border-collapse: collapse; font-family: var(--f-doc); font-size: 14px; font-variant-numeric: tabular-nums; min-width: 100%; color: var(--doc-ink); }
+table.apa caption { text-align: left; caption-side: top; padding-bottom: 8px; line-height: 1.6; }
+table.apa thead th { border-top: 1.5px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 6px 12px; font-weight: 600; text-align: right; white-space: nowrap; }
+table.apa td { padding: 4px 12px; height: 30px; text-align: right; white-space: nowrap; }
+table.apa thead th:first-child, table.apa thead th:nth-child(2), table.apa td:first-child, table.apa td:nth-child(2) { text-align: left; }
+table.apa tbody tr:last-child td { border-bottom: 1.5px solid var(--rule); }
+table.apa tr.fit td { font-size: 13px; color: var(--muted); padding-bottom: 8px; }
+p.tnote { font-family: var(--f-doc); font-size: 13px; line-height: 1.6; margin: 8px 0 0; color: var(--muted); }
+.caution { background: var(--warn-soft); color: var(--ink); border-radius: var(--r); padding: 12px 16px; font-size: 13px; max-width: 760px; }
+.caution b { color: var(--warn); font-weight: 600; }
+.caution ul { margin: 4px 0 0; padding-left: 18px; }
+.settings { font-family: var(--f-num); font-size: 12.5px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; background: var(--code-bg); padding: 12px 16px; border-radius: var(--r); margin: 0; max-width: 760px; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 8px 16px; border-radius: var(--r); font-size: 13px; z-index: 20; }
+@media (max-width: 900px) { .results { padding: 24px 16px; } }
+@media (max-width: 480px) {
+  .models { grid-template-columns: 1fr; }
+  .mcard { flex-direction: row; justify-content: flex-start; text-align: left; padding-left: 32px; gap: 12px; }
+  .mcard.on { padding-left: 31.5px; }
+  .mcard input { top: 50%; transform: translateY(-50%); left: 10px; }
+  .mcard svg { max-width: 80px; }
+  .row3 { grid-template-columns: 1fr 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) { button, .mcard, .chip, select, input { transition: border-color .12s, background-color .12s, box-shadow .12s; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <h1>모형분석 결과작성기</h1>
+    <span class="badge">MVP · 개발 중</span>
+    <p>데이터를 올리고 변수를 지정하면 매개·조절 분석의 결과표, 모형 그림, 결과 서술 초안까지 한 번에 만듭니다. 데이터는 이 브라우저 안에서만 계산되고 서버로 전송되지 않습니다.</p>
+  </header>
+
+  <div class="layout">
+    <div class="steps">
+      <section class="step" aria-labelledby="s1">
+        <h2 id="s1"><span class="n">1</span>데이터 불러오기</h2>
+        <div class="filebox">
+          <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+          <button class="small" id="loadSample">예시 데이터</button>
+        </div>
+        <p class="hint">CSV 또는 엑셀 파일. 첫 줄은 변수 이름이어야 합니다. SPSS 파일(.sav)은 SPSS에서 CSV로 저장해서 올려 주세요.</p>
+        <label class="f"><span>결측치 코드 (쉼표로 구분, 빈칸은 자동으로 결측)</span><input type="text" id="missing" placeholder="예: 999, -9"></label>
+        <div class="datainfo" id="dataInfo"></div>
+        <div class="scroll" id="preview" style="max-height:204px"></div>
+      </section>
+
+      <section class="step">
+        <details class="scoring" id="scoring">
+          <summary>(선택) 문항 점수 계산</summary>
+          <div class="stack">
+            <p class="hint">문항별 응답 자료일 때 사용합니다. 채점 기준은 척도 지침서를 확인해 직접 지정해 주세요. 문항이 하나라도 비어 있는 사례는 점수를 결측으로 둡니다.</p>
+            <label class="f"><span>새 변수 이름</span><input type="text" id="scName" placeholder="예: alex_mean"></label>
+            <div class="f"><span class="flabel">포함할 문항</span><div class="chips" id="scItems"></div></div>
+            <div class="f"><span class="flabel">역채점 문항</span><div class="chips" id="scRev"></div></div>
+            <div class="row3">
+              <label class="f"><span>최소 응답값</span><input type="number" id="scMin" value="1"></label>
+              <label class="f"><span>최대 응답값</span><input type="number" id="scMax" value="5"></label>
+              <label class="f"><span>계산 방식</span><select id="scMethod"><option value="mean">평균</option><option value="sum">합계</option></select></label>
+            </div>
+            <div class="btns"><button class="small" id="scAdd">점수 변수 만들기</button></div>
+            <div id="scMsg"></div>
+            <div class="scorelist" id="scList"></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="step" aria-labelledby="s2">
+        <h2 id="s2"><span class="n">2</span>분석 모형 선택</h2>
+        <div class="models" id="models">
+          <label class="mcard on"><input type="radio" name="model" value="simple" checked>
+            <svg viewBox="0 0 120 60" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="38" width="22" height="16"/><rect x="49" y="4" width="22" height="16"/><rect x="96" y="38" width="22" height="16"/><path d="M20 38 L50 20 M70 20 L100 38 M24 46 L94 46"/></g><g fill="currentColor" font-size="10" text-anchor="middle" font-family="sans-serif"><text x="13" y="50">X</text><text x="60" y="16">M</text><text x="107" y="50">Y</text></g></svg>
+            <span><span class="t">단순매개</span><br><span class="s">X → M → Y</span></span></label>
+          <label class="mcard"><input type="radio" name="model" value="serial">
+            <svg viewBox="0 0 120 60" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="38" width="22" height="16"/><rect x="28" y="4" width="24" height="16"/><rect x="68" y="4" width="24" height="16"/><rect x="96" y="38" width="22" height="16"/><path d="M16 38 L34 20 M52 12 L68 12 M86 20 L104 38 M24 46 L94 46"/></g><g fill="currentColor" font-size="10" text-anchor="middle" font-family="sans-serif"><text x="13" y="50">X</text><text x="40" y="16">M1</text><text x="80" y="16">M2</text><text x="107" y="50">Y</text></g></svg>
+            <span><span class="t">순차매개</span><br><span class="s">X → M1 → M2 → Y</span></span></label>
+          <label class="mcard"><input type="radio" name="model" value="moderation">
+            <svg viewBox="0 0 120 60" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="38" width="22" height="16"/><rect x="49" y="4" width="22" height="16"/><rect x="96" y="38" width="22" height="16"/><path d="M24 46 L94 46 M60 20 L60 44"/></g><g fill="currentColor" font-size="10" text-anchor="middle" font-family="sans-serif"><text x="13" y="50">X</text><text x="60" y="16">W</text><text x="107" y="50">Y</text></g></svg>
+            <span><span class="t">조절</span><br><span class="s">W가 X → Y를 조절</span></span></label>
+        </div>
+      </section>
+
+      <section class="step" aria-labelledby="s3">
+        <h2 id="s3"><span class="n">3</span>변수 역할 지정</h2>
+        <div class="row2">
+          <label class="f"><span>독립변인 X</span><select id="vX"></select></label>
+          <label class="f"><span>종속변인 Y</span><select id="vY"></select></label>
+        </div>
+        <div class="row2" id="medRow">
+          <label class="f" id="fM1"><span id="lM1">매개변인 M</span><select id="vM1"></select></label>
+          <label class="f" id="fM2"><span>매개변인 M2</span><select id="vM2"></select></label>
+          <label class="f" id="fM3"><span>매개변인 M3 (선택)</span><select id="vM3"></select></label>
+        </div>
+        <div class="row2" id="modRow" hidden>
+          <label class="f"><span>조절변인 W</span><select id="vW"></select></label>
+        </div>
+        <div class="f"><span class="flabel">공변인 (선택, 모든 회귀식에 투입)</span><div class="chips" id="covs"></div></div>
+        <div class="f">
+          <span class="flabel">논문에 쓸 변인 이름 (표·그림·문장에 사용)</span>
+          <div class="labels" id="labels"></div>
+        </div>
+      </section>
+
+      <section class="step" aria-labelledby="s4">
+        <h2 id="s4"><span class="n">4</span>분석 옵션</h2>
+        <div class="row3" id="bootOpts">
+          <label class="f"><span>부트스트랩 횟수</span><select id="oBoot"><option>1000</option><option selected>5000</option><option>10000</option></select></label>
+          <label class="f"><span>난수 시드</span><input type="number" id="oSeed" value="20261126"></label>
+          <label class="f"><span>신뢰수준</span><select id="oConf"><option value="0.90">90%</option><option value="0.95" selected>95%</option><option value="0.99">99%</option></select></label>
+        </div>
+        <div class="row2" id="modOpts" hidden>
+          <label class="f"><span>상호작용항 만들기</span><select id="oCenter"><option value="none">원점수 그대로</option><option value="mean">평균중심화</option></select></label>
+          <label class="f"><span>조건부 효과 산출 지점</span><select id="oProbe"><option value="percentile">16·50·84 백분위</option><option value="meansd">평균 ±1SD</option></select></label>
+        </div>
+        <div class="row2">
+          <label class="f"><span>계수 소수점</span><select id="oDec"><option selected>2</option><option>3</option></select></label>
+          <label class="f"><span>효과 소수점</span><select id="oDecInd"><option>2</option><option selected>3</option><option>4</option></select></label>
+        </div>
+        <label class="f"><span>분석 방법 문단에 적을 도구 이름</span><input type="text" id="oTool" value="웹 기반 분석 도구(모형분석 결과작성기)"></label>
+        <button class="primary" id="run">분석 실행</button>
+        <div id="runMsg"></div>
+      </section>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty" id="emptyState">왼쪽에서 데이터와 변수를 지정하고 <b>분석 실행</b>을 누르면 이곳에 결과가 나타납니다.</div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/*
+ * 매개·조절 분석 계산 엔진 (MVP)
+ * - 최소제곱(OLS) 회귀, 일반(동분산 가정) 표준오차
+ * - 단순매개(매개변인 1개) / 순차매개(매개변인 2~4개) / 조절(X×W)
+ * - 간접효과: 사례 재표집 부트스트랩, 백분위수(percentile) 신뢰구간
+ * 외부 라이브러리 없이 브라우저와 Node.js에서 모두 동작함.
+ */
+(function (root) {
+  'use strict';
+
+  // ---------- 분포 함수 ----------
+  function logGamma(x) {
+    const c = [76.18009172947146, -86.50532032941677, 24.01409824083091,
+      -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    let y = x, tmp = x + 5.5;
+    tmp -= (x + 0.5) * Math.log(tmp);
+    let ser = 1.000000000190015;
+    for (let j = 0; j < 6; j++) ser += c[j] / ++y;
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+  function betacf(a, b, x) {
+    const MAXIT = 300, EPS = 3e-16, FPMIN = 1e-300;
+    let qab = a + b, qap = a + 1, qam = a - 1, c = 1, d = 1 - qab * x / qap;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    d = 1 / d; let h = d;
+    for (let m = 1; m <= MAXIT; m++) {
+      const m2 = 2 * m;
+      let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+      c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+      d = 1 / d; h *= d * c;
+      aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+      c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+      d = 1 / d; const del = d * c; h *= del;
+      if (Math.abs(del - 1) < EPS) break;
+    }
+    return h;
+  }
+  // 정규화된 불완전 베타함수 I_x(a,b)
+  function ibeta(x, a, b) {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    const bt = Math.exp(logGamma(a + b) - logGamma(a) - logGamma(b) + a * Math.log(x) + b * Math.log(1 - x));
+    if (x < (a + 1) / (a + b + 2)) return bt * betacf(a, b, x) / a;
+    return 1 - bt * betacf(b, a, 1 - x) / b;
+  }
+  // t 분포 양측 p
+  function tPvalue(t, df) { return ibeta(df / (df + t * t), df / 2, 0.5); }
+  // F 분포 상측 p
+  function fPvalue(F, df1, df2) {
+    if (!(F > 0)) return 1;
+    return ibeta(df2 / (df2 + df1 * F), df2 / 2, df1 / 2);
+  }
+  // 양측 신뢰수준 conf에 해당하는 t 임계값
+  function tCrit(conf, df) {
+    const alpha = 1 - conf;
+    let lo = 0, hi = 1e4;
+    for (let i = 0; i < 200; i++) {
+      const mid = (lo + hi) / 2;
+      if (tPvalue(mid, df) > alpha) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+
+  // ---------- 행렬 ----------
+  function invert(A) {
+    const n = A.length;
+    const M = A.map((r, i) => r.concat(Array.from({ length: n }, (_, j) => (i === j ? 1 : 0))));
+    for (let col = 0; col < n; col++) {
+      let piv = col, best = Math.abs(M[col][col]);
+      for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > best) { best = Math.abs(M[r][col]); piv = r; }
+      if (best < 1e-12) return null; // 특이행렬
+      [M[col], M[piv]] = [M[piv], M[col]];
+      const p = M[col][col];
+      for (let j = 0; j < 2 * n; j++) M[col][j] /= p;
+      for (let r = 0; r < n; r++) {
+        if (r === col) continue;
+        const f = M[r][col];
+        if (f !== 0) for (let j = 0; j < 2 * n; j++) M[r][j] -= f * M[col][j];
+      }
+    }
+    return M.map(r => r.slice(n));
+  }
+
+  // ---------- 기술통계 ----------
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  function sd(a) { const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1)); }
+  // 백분위수: (n+1)p 위치 가중평균 (SPSS FREQUENCIES 기본 HAVERAGE 방식과 같은 정의)
+  function percentile(a, p) {
+    const s = a.slice().sort((x, y) => x - y), n = s.length;
+    const pos = (n + 1) * p;
+    if (pos <= 1) return s[0];
+    if (pos >= n) return s[n - 1];
+    const k = Math.floor(pos), frac = pos - k;
+    return s[k - 1] + frac * (s[k] - s[k - 1]);
+  }
+  const uniqueVals = a => Array.from(new Set(a)).sort((x, y) => x - y);
+
+  // ---------- 회귀 ----------
+  // y: 배열, cols: [{name, values}], 절편 자동 포함
+  function ols(y, cols, opts) {
+    opts = opts || {};
+    const n = y.length, p = cols.length + 1;
+    const X = new Array(n);
+    for (let i = 0; i < n; i++) { const r = new Array(p); r[0] = 1; for (let j = 0; j < cols.length; j++) r[j + 1] = cols[j].values[i]; X[i] = r; }
+    const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
+    const Xty = new Array(p).fill(0);
+    for (let i = 0; i < n; i++) {
+      const r = X[i];
+      for (let a = 0; a < p; a++) { Xty[a] += r[a] * y[i]; for (let b = a; b < p; b++) XtX[a][b] += r[a] * r[b]; }
+    }
+    for (let a = 0; a < p; a++) for (let b = 0; b < a; b++) XtX[a][b] = XtX[b][a];
+    const inv = invert(XtX);
+    if (!inv) return null;
+    const coef = inv.map(row => row.reduce((s, v, j) => s + v * Xty[j], 0));
+    if (opts.coefOnly) return { coef };
+    let sse = 0; const ym = mean(y); let sst = 0;
+    for (let i = 0; i < n; i++) {
+      let fit = 0; for (let j = 0; j < p; j++) fit += X[i][j] * coef[j];
+      sse += (y[i] - fit) ** 2; sst += (y[i] - ym) ** 2;
+    }
+    const df = n - p, mse = sse / df;
+    const conf = opts.conf || 0.95, tc = tCrit(conf, df);
+    const names = ['상수'].concat(cols.map(c => c.name));
+    const rows = coef.map((b, j) => {
+      const se = Math.sqrt(mse * inv[j][j]), t = b / se;
+      return { name: names[j], b, se, t, p: tPvalue(t, df), llci: b - tc * se, ulci: b + tc * se };
+    });
+    const r2 = 1 - sse / sst, k = p - 1;
+    const F = (r2 / k) / ((1 - r2) / df);
+    return { n, rows, coef, cov: inv.map(r => r.map(v => v * mse)), r2, R: Math.sqrt(r2), mse, F, df1: k, df2: df, pF: fPvalue(F, k, df), tcrit: tc };
+  }
+
+  // ---------- 난수(시드 고정) ----------
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // 백분위수 부트스트랩 구간: 정렬값에서 하한 ceil(B*α/2)번째, 상한 floor(B*(1-α/2))+1번째 값
+  function bootCI(arr, conf) {
+    const s = arr.slice().sort((x, y) => x - y), B = s.length, a = (1 - conf) / 2;
+    const lo = Math.max(1, Math.ceil(B * a)), hi = Math.min(B, Math.floor(B * (1 - a)) + 1);
+    return [s[lo - 1], s[hi - 1]];
+  }
+
+  // ---------- 데이터 준비 ----------
+  function toNumber(v, missingCodes) {
+    if (v === null || v === undefined) return NaN;
+    const s = String(v).trim();
+    if (s === '') return NaN;
+    const x = Number(s);
+    if (!isFinite(x)) return NaN;
+    if (missingCodes && missingCodes.includes(x)) return NaN;
+    return x;
+  }
+  // 분석에 쓰는 변수 모두에 값이 있는 사례만 사용(목록별 삭제)
+  function prepare(rows, vars, missingCodes) {
+    const out = {}; vars.forEach(v => (out[v] = []));
+    let dropped = 0;
+    for (const r of rows) {
+      const vals = vars.map(v => toNumber(r[v], missingCodes));
+      if (vals.some(x => isNaN(x))) { dropped++; continue; }
+      vars.forEach((v, j) => out[v].push(vals[j]));
+    }
+    return { data: out, n: rows.length - dropped, dropped, nTotal: rows.length };
+  }
+
+  function standardizedRows(fit, outcomeVals, colVals) {
+    const sy = sd(outcomeVals);
+    fit.rows.forEach((r, j) => { r.beta = j === 0 ? null : r.b * sd(colVals[j - 1]) / sy; });
+  }
+
+  // ---------- 매개(단순·순차) ----------
+  // spec: {x, mediators:[...], y, covariates:[], boot:5000, seed, conf:.95, missingCodes:[]}
+  function mediation(rows, spec) {
+    const covs = spec.covariates || [];
+    const meds = spec.mediators;
+    if (!meds || meds.length < 1) throw new Error('매개변인을 1개 이상 지정해야 함');
+    const allVars = [spec.x].concat(meds, [spec.y], covs);
+    if (new Set(allVars).size !== allVars.length) throw new Error('한 변수를 두 가지 역할에 동시에 지정할 수 없음');
+    const conf = spec.conf || 0.95, B = spec.boot == null ? 5000 : spec.boot, seed = spec.seed == null ? 1 : spec.seed;
+    const prep = prepare(rows, allVars, spec.missingCodes);
+    const D = prep.data, n = prep.n, k = meds.length;
+    if (n < allVars.length + 3) throw new Error('분석 가능한 사례 수가 너무 적음 (n=' + n + ')');
+    const warnings = [];
+    if (uniqueVals(D[spec.x]).length === 2) warnings.push('X가 두 값만 가지는 변수임. 표준화 계수(β)는 해석에 주의가 필요함.');
+
+    // 회귀식 정의: Mi ~ X + M1..M(i-1) + C ; Y ~ X + M + C ; 총효과 Y ~ X + C
+    const eqDefs = [];
+    for (let i = 0; i < k; i++) eqDefs.push({ outcome: meds[i], preds: [spec.x].concat(meds.slice(0, i), covs) });
+    eqDefs.push({ outcome: spec.y, preds: [spec.x].concat(meds, covs) });
+    const totalDef = { outcome: spec.y, preds: [spec.x].concat(covs) };
+
+    function fitAll(idx, coefOnly) {
+      const pick = v => (idx ? idx.map(i => D[v][i]) : D[v]);
+      const res = [];
+      for (const e of eqDefs) {
+        const f = ols(pick(e.outcome), e.preds.map(p => ({ name: p, values: pick(p) })), { conf, coefOnly });
+        if (!f) return null;
+        res.push(f);
+      }
+      return res;
+    }
+    // 경로계수 추출: a[i] (X→Mi), d[i][j] (Mj→Mi, j<i), b[i] (Mi→Y), cp (X→Y 직접)
+    function paths(fits) {
+      const a = [], d = [], b = [];
+      for (let i = 0; i < k; i++) { a.push(fits[i].coef[1]); d.push(fits[i].coef.slice(2, 2 + i)); }
+      const fy = fits[k].coef;
+      for (let i = 0; i < k; i++) b.push(fy[2 + i]);
+      return { a, d, b, cp: fy[1] };
+    }
+    // 간접 경로: 매개변인의 순서를 유지하는 모든 부분집합
+    const routes = [];
+    for (let mask = 1; mask < (1 << k); mask++) {
+      const s = []; for (let i = 0; i < k; i++) if (mask & (1 << i)) s.push(i);
+      routes.push(s);
+    }
+    routes.sort((p, q) => (p[0] - q[0]) || (p.length - q.length) || (p.join() < q.join() ? -1 : 1));
+    function indirects(P) {
+      return routes.map(s => {
+        let v = P.a[s[0]];
+        for (let t = 1; t < s.length; t++) v *= P.d[s[t]][s[t - 1]];
+        return v * P.b[s[s.length - 1]];
+      });
+    }
+
+    const fits = fitAll(null, false);
+    if (!fits) throw new Error('회귀식을 계산할 수 없음(변수 간 완전 공선성 등)');
+    fits.forEach((f, i) => standardizedRows(f, D[eqDefs[i].outcome], eqDefs[i].preds.map(p => D[p])));
+    const totalFit = ols(D[spec.y], totalDef.preds.map(p => ({ name: p, values: D[p] })), { conf });
+    standardizedRows(totalFit, D[spec.y], totalDef.preds.map(p => D[p]));
+    const P = paths(fits);
+    const ind = indirects(P);
+    const totalInd = ind.reduce((s, v) => s + v, 0);
+    const sdX = sd(D[spec.x]), sdY = sd(D[spec.y]);
+
+    // 부트스트랩
+    const bootInd = routes.map(() => []), bootTot = [];
+    let failed = 0;
+    if (B > 0) {
+      const rnd = mulberry32(seed);
+      const idx = new Array(n);
+      let done = 0, guard = 0;
+      while (done < B && guard < B * 10) {
+        guard++;
+        for (let i = 0; i < n; i++) idx[i] = Math.floor(rnd() * n);
+        const bf = fitAll(idx, true);
+        if (!bf) { failed++; continue; }
+        const bi = indirects(paths(bf));
+        bi.forEach((v, j) => bootInd[j].push(v));
+        bootTot.push(bi.reduce((s, v) => s + v, 0));
+        done++;
+      }
+    }
+    const medLabel = i => 'M' + (k === 1 ? '' : i + 1);
+    function effRow(label, routeNames, est, boots) {
+      const r = { label, route: routeNames, effect: est, std: est * sdX / sdY };
+      if (boots.length) {
+        const ci = bootCI(boots, conf);
+        r.bootSE = sd(boots); r.llci = ci[0]; r.ulci = ci[1];
+        const sci = bootCI(boots.map(v => v * sdX / sdY), conf);
+        r.stdLlci = sci[0]; r.stdUlci = sci[1];
+        r.significant = !(ci[0] <= 0 && ci[1] >= 0);
+      }
+      return r;
+    }
+    const indirectRows = routes.map((s, j) => effRow(
+      'Ind' + (j + 1),
+      [spec.x].concat(s.map(i => meds[i]), [spec.y]),
+      ind[j], bootInd[j]));
+    if (k > 1) indirectRows.push(effRow('총간접효과', null, totalInd, bootTot));
+
+    const cpRow = fits[k].rows[1], cRow = totalFit.rows[1];
+    return {
+      model: k === 1 ? 'simple' : 'serial',
+      spec: { x: spec.x, mediators: meds, y: spec.y, covariates: covs, boot: B, seed, conf },
+      sample: { nTotal: prep.nTotal, n, dropped: prep.dropped },
+      descriptives: allVars.map(v => ({ name: v, mean: mean(D[v]), sd: sd(D[v]) })),
+      equations: eqDefs.map((e, i) => ({ outcome: e.outcome, predictors: e.preds, fit: fits[i] })),
+      totalEquation: { outcome: spec.y, predictors: totalDef.preds, fit: totalFit },
+      paths: P,
+      total: Object.assign({ std: cRow.b * sdX / sdY }, cRow),
+      direct: Object.assign({ std: cpRow.b * sdX / sdY }, cpRow),
+      indirect: indirectRows,
+      bootFailed: failed,
+      warnings,
+      medLabel
+    };
+  }
+
+  // ---------- 조절 ----------
+  // spec: {x, w, y, covariates, center:'none'|'mean', probe:'percentile'|'meansd', conf, jn:true}
+  function moderation(rows, spec) {
+    const covs = spec.covariates || [];
+    const allVars = [spec.x, spec.w, spec.y].concat(covs);
+    if (new Set(allVars).size !== allVars.length) throw new Error('한 변수를 두 가지 역할에 동시에 지정할 수 없음');
+    const conf = spec.conf || 0.95;
+    const prep = prepare(rows, allVars, spec.missingCodes);
+    const D = prep.data, n = prep.n;
+    if (n < allVars.length + 4) throw new Error('분석 가능한 사례 수가 너무 적음 (n=' + n + ')');
+    const center = spec.center || 'none';
+    const mx = mean(D[spec.x]), mw = mean(D[spec.w]);
+    const X = center === 'mean' ? D[spec.x].map(v => v - mx) : D[spec.x];
+    const W = center === 'mean' ? D[spec.w].map(v => v - mw) : D[spec.w];
+    const XW = X.map((v, i) => v * W[i]);
+    const intName = spec.x + ' × ' + spec.w;
+    const cols = [{ name: spec.x, values: X }, { name: spec.w, values: W }, { name: intName, values: XW }]
+      .concat(covs.map(c => ({ name: c, values: D[c] })));
+    const fit = ols(D[spec.y], cols, { conf });
+    if (!fit) throw new Error('회귀식을 계산할 수 없음(변수 간 완전 공선성 등)');
+    const reduced = ols(D[spec.y], cols.filter((_, j) => j !== 2), { conf });
+    const dR2 = fit.r2 - reduced.r2;
+    const Fch = dR2 / ((1 - fit.r2) / fit.df2);
+    const change = { dR2, F: Fch, df1: 1, df2: fit.df2, p: fPvalue(Fch, 1, fit.df2) };
+
+    const b1 = fit.coef[1], b3 = fit.coef[3];
+    const V = fit.cov, v11 = V[1][1], v13 = V[1][3], v33 = V[3][3];
+    const tc = fit.tcrit;
+    const wUniq = uniqueVals(W);
+    let probeVals, probeLabels, probeType;
+    if (wUniq.length === 2) {
+      probeVals = wUniq; probeLabels = ['', '']; probeType = 'binary';
+    } else if (spec.probe === 'meansd') {
+      const m = mean(W), s = sd(W);
+      probeVals = [m - s, m, m + s]; probeLabels = ['M − 1SD', 'M', 'M + 1SD']; probeType = 'meansd';
+    } else {
+      probeVals = [0.16, 0.5, 0.84].map(p => percentile(W, p));
+      probeLabels = ['16번째 백분위', '50번째 백분위', '84번째 백분위']; probeType = 'percentile';
+    }
+    const cond = probeVals.map((w, i) => {
+      const eff = b1 + b3 * w, se = Math.sqrt(v11 + 2 * w * v13 + w * w * v33), t = eff / se;
+      return { label: probeLabels[i], w, wRaw: center === 'mean' ? w + mw : w, effect: eff, se, t, p: tPvalue(t, fit.df2), llci: eff - tc * se, ulci: eff + tc * se };
+    });
+
+    // Johnson-Neyman 경계값
+    let jn = null;
+    if (wUniq.length > 2 && spec.jn !== false) {
+      const A = b3 * b3 - tc * tc * v33, Bq = 2 * (b1 * b3 - tc * tc * v13), C = b1 * b1 - tc * tc * v11;
+      const wmin = wUniq[0], wmax = wUniq[wUniq.length - 1];
+      let roots = [];
+      if (Math.abs(A) < 1e-14) { if (Math.abs(Bq) > 1e-14) roots = [-C / Bq]; }
+      else { const disc = Bq * Bq - 4 * A * C; if (disc >= 0) roots = [(-Bq - Math.sqrt(disc)) / (2 * A), (-Bq + Math.sqrt(disc)) / (2 * A)]; }
+      roots = roots.filter(r => r >= wmin && r <= wmax).sort((a, b) => a - b);
+      jn = roots.map(r => ({
+        w: r, wRaw: center === 'mean' ? r + mw : r,
+        pctBelow: 100 * W.filter(v => v < r).length / n,
+        pctAbove: 100 * W.filter(v => v > r).length / n
+      }));
+      // 관찰 범위의 양 끝에서 조건부 효과 유의 여부
+      const sigAt = w => { const e = b1 + b3 * w, s = Math.sqrt(v11 + 2 * w * v13 + w * w * v33); return Math.abs(e / s) >= tc; };
+      jn = { bounds: jn, sigAtMin: sigAt(wmin), sigAtMax: sigAt(wmax), wmin, wmax };
+    }
+
+    // 단순기울기 그림용 예측값: X는 16·84번째 백분위(또는 M±1SD), 공변량은 평균
+    const xLoHi = spec.probe === 'meansd' ? [mean(X) - sd(X), mean(X) + sd(X)] : [percentile(X, 0.16), percentile(X, 0.84)];
+    const covMeans = covs.map(c => mean(D[c]));
+    const lines = probeVals.map((w, i) => ({
+      label: probeLabels[i], w, wRaw: cond[i].wRaw,
+      points: xLoHi.map(x => {
+        let yhat = fit.coef[0] + b1 * x + fit.coef[2] * w + b3 * x * w;
+        covMeans.forEach((m, j) => (yhat += fit.coef[4 + j] * m));
+        return { x, xRaw: center === 'mean' ? x + mx : x, y: yhat };
+      })
+    }));
+
+    return {
+      model: 'moderation',
+      spec: { x: spec.x, w: spec.w, y: spec.y, covariates: covs, center, probe: probeType, conf },
+      sample: { nTotal: prep.nTotal, n, dropped: prep.dropped },
+      descriptives: allVars.map(v => ({ name: v, mean: mean(D[v]), sd: sd(D[v]) })),
+      equation: { outcome: spec.y, fit },
+      change, conditional: cond, jn, lines, means: { x: mx, w: mw },
+      warnings: []
+    };
+  }
+
+  // ---------- 문항 채점 ----------
+  // def: {name, items:[...], reverse:[...], min, max, method:'mean'|'sum'}
+  // 문항 중 하나라도 결측이면 해당 사례의 점수는 결측 처리
+  function scoreScale(rows, def, missingCodes) {
+    const rev = new Set(def.reverse || []);
+    const k = def.items.length;
+    const complete = [];
+    const scores = rows.map(r => {
+      const vals = def.items.map(it => {
+        const v = toNumber(r[it], missingCodes);
+        return rev.has(it) ? def.min + def.max - v : v;
+      });
+      if (vals.some(v => isNaN(v))) return '';
+      complete.push(vals);
+      const s = vals.reduce((a, b) => a + b, 0);
+      return def.method === 'sum' ? s : s / k;
+    });
+    let alpha = null;
+    if (k >= 2 && complete.length > 2) {
+      const itemVar = def.items.map((_, j) => { const c = complete.map(r => r[j]); return sd(c) ** 2; });
+      const totVar = sd(complete.map(r => r.reduce((a, b) => a + b, 0))) ** 2;
+      alpha = (k / (k - 1)) * (1 - itemVar.reduce((a, b) => a + b, 0) / totVar);
+    }
+    // 범위 밖 응답 확인
+    let outOfRange = 0;
+    rows.forEach(r => def.items.forEach(it => { const v = toNumber(r[it], missingCodes); if (!isNaN(v) && (v < def.min || v > def.max)) outOfRange++; }));
+    return { scores, alpha, nComplete: complete.length, outOfRange };
+  }
+
+  const api = { ols, mediation, moderation, scoreScale, tPvalue, fPvalue, tCrit, percentile, bootCI, mulberry32, mean, sd, prepare };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.Engine = api;
+})(typeof window !== 'undefined' ? window : this);
+
+</script>
+<script>
+/*
+ * 결과 보고 모듈: 계산 결과(engine.js 출력) → 논문용 표, 모형 그림(SVG), 한국어 결과 서술 초안
+ * 숫자는 모두 계산 결과에서 그대로 가져오며, 문장은 미리 정한 문장 틀에 값만 채움.
+ */
+(function (root) {
+  'use strict';
+
+  // ---------- 숫자 형식 (APA 양식) ----------
+  function num(v, d) {
+    if (v === null || v === undefined || !isFinite(v)) return '—';
+    let s = Number(v).toFixed(d);
+    if (/^-0\.?0*$/.test(s)) s = s.slice(1); // -0.00 → 0.00
+    return s.replace('-', '−');
+  }
+  // 1을 넘을 수 없는 값(p, R² 등)은 앞자리 0 생략
+  function noLead(v, d) { return num(v, d).replace(/^(−?)0\./, '$1.'); }
+  function pStr(p) { return p < 0.001 ? '< .001' : '= ' + noLead(p, 3); }
+  function pCell(p) { return p < 0.001 ? '< .001' : noLead(p, 3); }
+  function stars(p) { return p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : ''; }
+  function ci(lo, hi, d) { return '[' + num(lo, d) + ', ' + num(hi, d) + ']'; }
+
+  // ---------- 한국어 조사 ----------
+  function hasBatchim(word) {
+    const ch = String(word).replace(/\s*\([^()]*\)\s*$/, '').trim().slice(-1), code = ch.charCodeAt(0);
+    if (code >= 0xAC00 && code <= 0xD7A3) return (code - 0xAC00) % 28;
+    return null; // 한글이 아니면 판단 불가
+  }
+  function josa(word, pair) {
+    const [a, b] = pair.split('/'); // 받침 있을 때 / 없을 때
+    const j = hasBatchim(word);
+    if (j === null) return word + a + '(' + b + ')';
+    if (pair === '으로/로') return word + (j === 0 || j === 8 ? '로' : '으로');
+    return word + (j ? a : b);
+  }
+  const EUN = '은/는', I = '이/가', EUL = '을/를', WA = '과/와', RO = '으로/로';
+
+  function nameOf(labels, v) { return (labels && labels[v]) || v; }
+  function joinKo(arr) {
+    if (arr.length <= 1) return arr.join('');
+    return arr.slice(0, -1).map(s => s).join(', ') + ', ' + arr[arr.length - 1];
+  }
+
+  const MODEL_INFO = {
+    simple: { title: '단순매개모형', hayes: '모형 4' },
+    serial: { title: '순차매개모형', hayes: '모형 6' },
+    moderation: { title: '조절모형', hayes: '모형 1' }
+  };
+  const HAYES_REF = 'Hayes, A. F. (2022). Introduction to mediation, moderation, and conditional process analysis: A regression-based approach (3rd ed.). Guilford Press.';
+
+  // ---------- 분석 방법 설명 ----------
+  function methodText(res, opt) {
+    const L = opt.labels, tool = opt.toolName || '웹 기반 분석 도구';
+    const s = res.spec, info = MODEL_INFO[res.model], conf = Math.round(s.conf * 100);
+    const covTxt = s.covariates.length ? josa(joinKo(s.covariates.map(c => nameOf(L, c))), EUL) + ' 공변인으로 모든 회귀식에 투입하였다. ' : '';
+    const miss = res.sample.dropped ? `분석 변인에 결측치가 있는 ${res.sample.dropped}명은 목록별 삭제하여 최종 ${res.sample.n}명의 자료를 분석하였다. ` : `최종 ${res.sample.n}명의 자료를 분석하였다. `;
+    let t = `자료 분석에는 ${josa(tool, EUL)} 사용하였다. ${miss}`;
+    if (res.model !== 'moderation') {
+      const meds = s.mediators.map(m => nameOf(L, m));
+      t += `${josa(nameOf(L, s.x), WA)} ${nameOf(L, s.y)}의 관계에서 ${res.model === 'simple' ? meds[0] : joinKo(meds) + '(순서대로)'}의 ${res.model === 'simple' ? '' : '순차적 '}매개효과를 검증하기 위해, Hayes(2022)의 ${info.hayes}에 해당하는 구조로 최소제곱(OLS) 회귀분석을 실시하였다. ${covTxt}`;
+      if (s.boot > 0) t += `간접효과의 유의성은 ${s.boot.toLocaleString()}회의 부트스트랩 재표집(난수 시드 = ${s.seed})으로 산출한 ${conf}% 백분위수 신뢰구간으로 검증하였으며, 신뢰구간에 0이 포함되지 않으면 간접효과가 유의한 것으로 판단하였다.`;
+    } else {
+      t += `${josa(nameOf(L, s.x), WA)} ${nameOf(L, s.y)}의 관계에서 ${nameOf(L, s.w)}의 조절효과를 검증하기 위해, Hayes(2022)의 ${info.hayes}에 해당하는 구조로 최소제곱(OLS) 회귀분석을 실시하였다. ${covTxt}`;
+      if (s.center === 'mean') t += `상호작용항은 ${josa(nameOf(L, s.x), WA)} ${josa(nameOf(L, s.w), EUL)} 평균중심화한 뒤 곱하여 생성하였다. `;
+      else t += `상호작용항은 ${josa(nameOf(L, s.x), WA)} ${nameOf(L, s.w)}의 원점수를 곱하여 생성하였다(중심화하지 않음). `;
+      if (s.probe === 'binary') t += `조절변인이 두 값을 가지는 변인이므로 각 값에서 ${nameOf(L, s.x)}의 조건부 효과를 산출하였다.`;
+      else t += `조건부 효과는 ${nameOf(L, s.w)}의 ${s.probe === 'meansd' ? '평균 및 평균 ±1 표준편차' : '16번째, 50번째, 84번째 백분위수'}에서 산출하였고, Johnson-Neyman 방법으로 조건부 효과가 유의한 조절변인의 범위를 확인하였다.`;
+    }
+    return t;
+  }
+
+  // ---------- 표 ----------
+  // 표 객체: {title, headers, rows:[[...]], note}
+  function mediationTables(res, opt) {
+    const L = opt.labels, d = opt.dec, di = opt.decInd, conf = Math.round(res.spec.conf * 100);
+    const rows = [];
+    res.equations.forEach(eq => {
+      const f = eq.fit;
+      f.rows.forEach((r, j) => {
+        rows.push([j === 0 ? nameOf(L, eq.outcome) : '', nameOf(L, r.name), num(r.b, d), num(r.se, d), j === 0 ? '' : num(r.beta, d), num(r.t, d), pCell(r.p), ci(r.llci, r.ulci, d)]);
+      });
+      rows.push(['', `R² = ${noLead(f.r2, d)}, F(${f.df1}, ${f.df2}) = ${num(f.F, d)}, p ${pStr(f.pF)}`, '', '', '', '', '', '']);
+    });
+    const t1 = {
+      title: `경로별 회귀계수 (N = ${res.sample.n})`,
+      headers: ['종속변인', '예측변인', 'B', 'SE', 'β', 't', 'p', `${conf}% CI`],
+      rows,
+      note: 'B = 비표준화 계수, β = 표준화 계수, CI = 신뢰구간.'
+    };
+    const eRows = [];
+    const route = r => r.route ? r.route.map(v => nameOf(L, v)).join(' → ') : '총간접효과';
+    eRows.push(['총효과', `${nameOf(L, res.spec.x)} → ${nameOf(L, res.spec.y)}`, num(res.total.b, di), num(res.total.se, di), ci(res.total.llci, res.total.ulci, di), num(res.total.std, di)]);
+    eRows.push(['직접효과', `${nameOf(L, res.spec.x)} → ${nameOf(L, res.spec.y)}`, num(res.direct.b, di), num(res.direct.se, di), ci(res.direct.llci, res.direct.ulci, di), num(res.direct.std, di)]);
+    res.indirect.forEach(r => eRows.push(['간접효과', route(r), num(r.effect, di), num(r.bootSE, di), r.llci == null ? '—' : ci(r.llci, r.ulci, di), num(r.std, di)]));
+    const t2 = {
+      title: '총효과, 직접효과, 간접효과',
+      headers: ['구분', '경로', 'B', 'SE', `${conf}% CI`, '표준화 효과'],
+      rows: eRows,
+      note: `총효과·직접효과의 SE와 신뢰구간은 회귀분석 결과이며, 간접효과의 SE와 신뢰구간은 ${res.spec.boot.toLocaleString()}회 부트스트랩(시드 = ${res.spec.seed})의 백분위수 방법으로 산출함. 표준화 효과는 X와 Y의 표준편차로 표준화한 값임.`
+    };
+    return [t1, t2];
+  }
+
+  function moderationTables(res, opt) {
+    const L = opt.labels, d = opt.dec, conf = Math.round(res.spec.conf * 100), f = res.equation.fit, s = res.spec;
+    const intName = s.x + ' × ' + s.w;
+    const label = n => n === intName ? `${nameOf(L, s.x)} × ${nameOf(L, s.w)}` : nameOf(L, n);
+    const rows = f.rows.map(r => [label(r.name), num(r.b, d), num(r.se, d), num(r.t, d), pCell(r.p), ci(r.llci, r.ulci, d)]);
+    const t1 = {
+      title: `조절모형 회귀분석 결과 (종속변인: ${nameOf(L, s.y)}, N = ${res.sample.n})`,
+      headers: ['예측변인', 'B', 'SE', 't', 'p', `${conf}% CI`],
+      rows,
+      note: `R² = ${noLead(f.r2, d)}, F(${f.df1}, ${f.df2}) = ${num(f.F, d)}, p ${pStr(f.pF)}. 상호작용항 추가에 따른 ΔR² = ${noLead(res.change.dR2, 3)}, F(1, ${res.change.df2}) = ${num(res.change.F, d)}, p ${pStr(res.change.p)}.` +
+        (s.center === 'mean' ? ` ${josa(nameOf(L, s.x), WA)} ${josa(nameOf(L, s.w), EUN)} 평균중심화함.` : '')
+    };
+    const cRows = res.conditional.map(c => [
+      s.probe === 'binary' ? `${nameOf(L, s.w)} = ${num(c.w, 0)}` : `${c.label} (${nameOf(L, s.w)} = ${num(c.w, d)})`, num(c.effect, d), num(c.se, d), num(c.t, d), pCell(c.p), ci(c.llci, c.ulci, d)
+    ]);
+    const t2 = {
+      title: `${nameOf(L, s.w)} 수준별 ${nameOf(L, s.x)}의 조건부 효과`,
+      headers: [`${nameOf(L, s.w)} 수준`, 'B', 'SE', 't', 'p', `${conf}% CI`],
+      rows: cRows,
+      note: s.center === 'mean' ? `${nameOf(L, s.w)} 값은 평균중심화된 값임(원점수 = 표시값 + ${num(res.means.w, d)}).` : ''
+    };
+    return [t1, t2];
+  }
+
+  function tables(res, opt) { return res.model === 'moderation' ? moderationTables(res, opt) : mediationTables(res, opt); }
+
+  function tableToHTML(t, i) {
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    let h = `<table class="apa"><caption><b>표 ${i + 1}</b><br><i>${esc(t.title)}</i></caption><thead><tr>${t.headers.map(x => `<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`;
+    t.rows.forEach(r => {
+      const isFit = r.slice(2).every(c => c === '') && r[1] && r[1].startsWith('R²');
+      if (isFit) h += `<tr class="fit"><td></td><td colspan="${t.headers.length - 1}">${esc(r[1])}</td></tr>`;
+      else h += '<tr>' + r.map(c => `<td>${esc(c)}</td>`).join('') + '</tr>';
+    });
+    h += '</tbody></table>';
+    if (t.note) h += `<p class="tnote"><i>주.</i> ${esc(t.note)}</p>`;
+    return h;
+  }
+  function tableToTSV(t) {
+    return [t.title, t.headers.join('\t')].concat(t.rows.map(r => r.join('\t'))).concat(t.note ? ['주. ' + t.note] : []).join('\n');
+  }
+  function tableToCSV(t) {
+    const q = s => /[",\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s;
+    return [t.headers.map(q).join(',')].concat(t.rows.map(r => r.map(q).join(','))).join('\n');
+  }
+
+  // ---------- 결과 서술 ----------
+  function pathSentence(pred, outcome, r, d, alpha) {
+    const stat = `B = ${num(r.b, d)}, SE = ${num(r.se, d)}, t = ${num(r.t, d)}, p ${pStr(r.p)}`;
+    if (r.p < alpha) return `${josa(pred, EUN)} ${josa(outcome, EUL)} 유의하게 ${r.b > 0 ? '정적으로' : '부적으로'} 예측하였다(${stat})`;
+    return `${josa(pred, EUN)} ${josa(outcome, EUL)} 유의하게 예측하지 않았다(${stat})`;
+  }
+  function fitSentence(outcome, f, d) {
+    return `이 회귀식은 ${outcome} 변량의 ${num(f.r2 * 100, 1)}%를 설명하였다(R² = ${noLead(f.r2, d)}, F(${f.df1}, ${f.df2}) = ${num(f.F, d)}, p ${pStr(f.pF)})`;
+  }
+
+  function mediationText(res, opt) {
+    const L = opt.labels, d = opt.dec, di = opt.decInd, s = res.spec, alpha = 1 - s.conf, conf = Math.round(s.conf * 100);
+    const X = nameOf(L, s.x), Y = nameOf(L, s.y);
+    const covPre = s.covariates.length ? `${josa(joinKo(s.covariates.map(c => nameOf(L, c))), EUL)} 통제한 상태에서 ` : '';
+    const paras = [];
+    const k = s.mediators.length;
+    // 매개변인 회귀식
+    res.equations.forEach((eq, i) => {
+      const O = nameOf(L, eq.outcome), f = eq.fit, isY = i === k;
+      const preds = eq.predictors.filter(p => !s.covariates.includes(p));
+      const sents = preds.map(p => pathSentence(nameOf(L, p), O, f.rows[eq.predictors.indexOf(p) + 1], d, alpha));
+      let intro;
+      if (!isY) intro = i === 0 ? `${covPre}먼저 ${josa(O, EUL)} 종속변인으로 한 회귀분석 결과, ` : `다음으로 ${josa(O, EUL)} 종속변인으로 한 회귀분석 결과, `;
+      else intro = `${josa(Y, EUL)} 종속변인으로 ${josa(joinKo([X].concat(s.mediators.map(m => nameOf(L, m)))), EUL)} 함께 투입한 결과, `;
+      let body = sents.join('. 또한 ');
+      // 직접효과는 표현을 바꿈
+      if (isY) {
+        const medSents = sents.slice(1);
+        const r = f.rows[1];
+        const dStat = `B = ${num(r.b, d)}, SE = ${num(r.se, d)}, t = ${num(r.t, d)}, p ${pStr(r.p)}`;
+        const direct = r.p < alpha ? `${X}의 직접효과는 유의하였다(${dStat})` : `${X}의 직접효과는 유의하지 않았다(${dStat})`;
+        body = medSents.join('. 또한 ') + '. ' + direct;
+      }
+      paras.push(intro + body + '. ' + fitSentence(O, f, d) + '.');
+    });
+    // 총효과
+    const tr = res.total;
+    const tStat = `B = ${num(tr.b, di)}, SE = ${num(tr.se, di)}, t = ${num(tr.t, d)}, p ${pStr(tr.p)}`;
+    let tot = `매개변인을 투입하지 않았을 때 ${X}의 ${Y}에 대한 총효과는 ${tr.p < alpha ? '유의하였다' : '유의하지 않았다'}(${tStat}).`;
+    // 간접효과
+    if (s.boot > 0) {
+      const routeTxt = r => {
+        const ms = r.route.slice(1, -1).map(m => nameOf(L, m));
+        return `${X}에서 ${josa(ms.join(', '), EUL)} ${ms.length > 1 ? '순차적으로 ' : ''}거쳐 ${josa(Y, RO)} 가는 간접효과`;
+      };
+      const indS = res.indirect.map(r => {
+        const stat = `B = ${num(r.effect, di)}, Boot SE = ${num(r.bootSE, di)}, ${conf}% CI ${ci(r.llci, r.ulci, di)}`;
+        const name = r.route ? routeTxt(r) : '총간접효과';
+        return `${name}는 ${r.significant ? '신뢰구간에 0이 포함되지 않아 유의하였다' : '신뢰구간에 0이 포함되어 유의하지 않았다'}(${stat})`;
+      });
+      paras.push(tot + ` 부트스트랩 검증 결과, ` + indS.join('. ') + '.');
+    } else paras.push(tot);
+    return paras;
+  }
+
+  function moderationText(res, opt) {
+    const L = opt.labels, d = opt.dec, s = res.spec, alpha = 1 - s.conf, conf = Math.round(s.conf * 100), f = res.equation.fit;
+    const X = nameOf(L, s.x), W = nameOf(L, s.w), Y = nameOf(L, s.y);
+    const covPre = s.covariates.length ? `${josa(joinKo(s.covariates.map(c => nameOf(L, c))), EUL)} 통제한 상태에서 ` : '';
+    const ri = f.rows[3];
+    const iStat = `B = ${num(ri.b, d)}, SE = ${num(ri.se, d)}, t = ${num(ri.t, d)}, p ${pStr(ri.p)}`;
+    const ch = res.change;
+    const chStat = `ΔR² = ${noLead(ch.dR2, 3)}, F(1, ${ch.df2}) = ${num(ch.F, d)}, p ${pStr(ch.p)}`;
+    const paras = [];
+    let p1 = `${covPre}${X}, ${W}, 그리고 두 변인의 상호작용항을 투입하여 ${josa(Y, EUL)} 예측한 결과, 회귀식은 ${Y} 변량의 ${num(f.r2 * 100, 1)}%를 설명하였다(R² = ${noLead(f.r2, d)}, F(${f.df1}, ${f.df2}) = ${num(f.F, d)}, p ${pStr(f.pF)}). `;
+    if (ri.p < alpha) p1 += `${X} × ${W} 상호작용항은 ${josa(Y, EUL)} 유의하게 예측하였으며(${iStat}), 상호작용항 추가로 설명력이 유의하게 증가하였다(${chStat}). 이는 ${josa(X, WA)} ${Y}의 관계가 ${W}의 수준에 따라 달라짐을 의미한다.`;
+    else p1 += `${X} × ${W} 상호작용항은 유의하지 않았으며(${iStat}; ${chStat}), ${W}의 조절효과는 확인되지 않았다.`;
+    paras.push(p1);
+    if (ri.p < alpha) {
+      const cs = res.conditional.map(c => {
+        const where = s.probe === 'binary' ? `${W} = ${num(c.w, 0)}일 때` : `${josa(W, I)} ${c.label}(${num(c.w, d)})일 때`;
+        const stat = `B = ${num(c.effect, d)}, SE = ${num(c.se, d)}, t = ${num(c.t, d)}, p ${pStr(c.p)}, ${conf}% CI ${ci(c.llci, c.ulci, d)}`;
+        return `${where} ${X}의 조건부 효과는 ${c.p < alpha ? (c.effect > 0 ? '유의한 정적 효과로 나타났고' : '유의한 부적 효과로 나타났고') : '유의하지 않았고'}(${stat})`;
+      });
+      let p2 = '단순기울기 분석 결과, ' + cs.join(', ').replace(/고\(([^)]*)\)$/, '다($1)') + '.';
+      p2 = p2.replace(/나타났고\(([^()]*)\)\.$/, '나타났다($1).').replace(/않았고\(([^()]*)\)\.$/, '않았다($1).');
+      if (res.jn) {
+        const b = res.jn.bounds, cen = s.center === 'mean' ? '(평균중심화된 값 기준)' : '';
+        if (b.length === 0) p2 += ` Johnson-Neyman 분석 결과, 관찰된 ${W}의 범위(${num(res.jn.wmin, d)} ~ ${num(res.jn.wmax, d)})${cen} 전체에서 조건부 효과가 ${res.jn.sigAtMin ? '유의하였다' : '유의하지 않았다'}.`;
+        else if (b.length === 1) {
+          const v = b[0];
+          p2 += res.jn.sigAtMin
+            ? ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(v.w, d)}보다 낮을 때(사례의 ${num(v.pctBelow, 1)}%) ${X}의 조건부 효과가 유의하였다.`
+            : ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(v.w, d)}보다 높을 때(사례의 ${num(v.pctAbove, 1)}%) ${X}의 조건부 효과가 유의하였다.`;
+        } else {
+          p2 += res.jn.sigAtMin
+            ? ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(b[0].w, d)}보다 낮거나 ${num(b[1].w, d)}보다 높을 때 ${X}의 조건부 효과가 유의하였다.`
+            : ` Johnson-Neyman 분석 결과, ${josa(W + cen, I)} ${num(b[0].w, d)}에서 ${num(b[1].w, d)} 사이일 때 ${X}의 조건부 효과가 유의하였다.`;
+        }
+      }
+      paras.push(p2);
+    }
+    return paras;
+  }
+
+  function resultText(res, opt) { return res.model === 'moderation' ? moderationText(res, opt) : mediationText(res, opt); }
+
+  // ---------- 모형 그림 (흑백 논문용 SVG) ----------
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+  function box(x, y, w, h, label) {
+    return `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" fill="#fff" stroke="#000" stroke-width="1.5"/>` +
+      `<text x="${x}" y="${y + 5}" text-anchor="middle" font-size="14">${esc(label)}</text>`;
+  }
+  // 상자 경계에서 시작·끝나는 화살표
+  function edgePoint(cx, cy, w, h, tx, ty) {
+    const dx = tx - cx, dy = ty - cy;
+    const sx = dx === 0 ? Infinity : (w / 2) / Math.abs(dx), sy = dy === 0 ? Infinity : (h / 2) / Math.abs(dy);
+    const s = Math.min(sx, sy);
+    return [cx + dx * s, cy + dy * s];
+  }
+  function arrow(n1, n2, label, opts) {
+    opts = opts || {};
+    const [x1, y1] = edgePoint(n1.x, n1.y, n1.w, n1.h, n2.x, n2.y);
+    const [x2, y2] = edgePoint(n2.x, n2.y, n2.w, n2.h, n1.x, n1.y);
+    let path, lx, ly;
+    if (opts.curve) {
+      const mx = (x1 + x2) / 2, my = Math.min(y1, y2) - opts.curve;
+      path = `M${x1},${y1 - 2} Q${mx},${my} ${x2},${y2 - 2}`;
+      lx = mx; ly = (my + Math.min(y1, y2)) / 2 - 2;
+    } else {
+      path = `M${x1},${y1} L${x2},${y2}`;
+      lx = (x1 + x2) / 2 + (opts.dx || 0); ly = (y1 + y2) / 2 + (opts.dy || -8);
+    }
+    return `<path d="${path}" fill="none" stroke="#000" stroke-width="1.3" marker-end="url(#ah)"${opts.dash ? ' stroke-dasharray="5,4"' : ''}/>` +
+      (label ? `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="12.5" paint-order="stroke" stroke="#fff" stroke-width="4">${esc(label)}</text>` : '');
+  }
+  const DEFS = '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#000"/></marker></defs>';
+
+  function mediationFigure(res, opt) {
+    const L = opt.labels, d = opt.dec, s = res.spec, k = s.mediators.length;
+    const W = k === 1 ? 500 : 160 + 175 * (k + 1), H = 260 + (k > 2 ? 30 : 0);
+    const nodeW = 130, nodeH = 44;
+    const X = { x: 80, y: H - 60, w: nodeW, h: nodeH }, Yn = { x: W - 80, y: H - 60, w: nodeW, h: nodeH };
+    const Ms = s.mediators.map((m, i) => ({ x: k === 1 ? W / 2 : 80 + (W - 160) * (i + 1) / (k + 1), y: 70 + (k > 2 ? 30 : 0), w: nodeW, h: nodeH }));
+    const lab = r => `${num(r.b, d)}${stars(r.p)}`;
+    let g = '';
+    // 경로
+    res.equations.slice(0, k).forEach((eq, i) => {
+      const f = eq.fit;
+      g += arrow(X, Ms[i], lab(f.rows[1]), { dx: -14, dy: -4 });
+      for (let j = 0; j < i; j++) g += arrow(Ms[j], Ms[i], lab(f.rows[2 + j]), j === i - 1 ? { dy: -8 } : { curve: 40 + 15 * (i - j) });
+    });
+    const fy = res.equations[k].fit;
+    Ms.forEach((m, i) => (g += arrow(m, Yn, lab(fy.rows[2 + i]), { dx: 14, dy: -4 })));
+    const cp = fy.rows[1], tot = res.total;
+    g += arrow(X, Yn, `${lab(cp)} (${num(tot.b, d)}${stars(tot.p)})`, { dy: 20 });
+    g += box(X.x, X.y, X.w, X.h, nameOf(L, s.x)) + box(Yn.x, Yn.y, Yn.w, Yn.h, nameOf(L, s.y));
+    Ms.forEach((m, i) => (g += box(m.x, m.y, m.w, m.h, nameOf(L, s.mediators[i]))));
+    const note = `비표준화 계수. 괄호 안은 총효과.${s.covariates.length ? ' 공변인 경로는 생략함.' : ''} *p < .05, **p < .01, ***p < .001.`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H + 30}" width="${W}" height="${H + 30}" font-family="'Noto Sans KR','Malgun Gothic',sans-serif" style="background:#fff">${DEFS}<rect width="100%" height="100%" fill="#fff"/>${g}<text x="10" y="${H + 20}" font-size="11">${esc(note)}</text></svg>`;
+  }
+
+  function moderationFigure(res, opt) {
+    const L = opt.labels, d = opt.dec, s = res.spec, f = res.equation.fit;
+    const W = 520, H = 220;
+    const X = { x: 90, y: 150, w: 130, h: 44 }, Yn = { x: W - 90, y: 150, w: 130, h: 44 }, Wn = { x: W / 2, y: 50, w: 130, h: 44 };
+    let g = arrow(X, Yn, `${num(f.rows[1].b, d)}${stars(f.rows[1].p)}`, { dy: 22 });
+    // W → X→Y 경로의 중간
+    const mid = { x: W / 2, y: 150, w: 2, h: 2 };
+    g += `<path d="M${W / 2},${50 + 22} L${W / 2},${146}" stroke="#000" stroke-width="1.3" marker-end="url(#ah)"/>`;
+    g += `<text x="${W / 2 + 8}" y="112" font-size="12.5" paint-order="stroke" stroke="#fff" stroke-width="4">${esc(`상호작용 ${num(f.rows[3].b, d)}${stars(f.rows[3].p)}`)}</text>`;
+    g += box(X.x, X.y, X.w, X.h, nameOf(L, s.x)) + box(Yn.x, Yn.y, Yn.w, Yn.h, nameOf(L, s.y)) + box(Wn.x, Wn.y, Wn.w, Wn.h, nameOf(L, s.w));
+    const note = `비표준화 계수. X→Y 계수는 ${nameOf(L, s.w)} = 0${s.center === 'mean' ? '(평균)' : ''}일 때의 효과임. *p < .05, **p < .01, ***p < .001.`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H + 20}" width="${W}" height="${H + 20}" font-family="'Noto Sans KR','Malgun Gothic',sans-serif" style="background:#fff">${DEFS}<rect width="100%" height="100%" fill="#fff"/>${g}<text x="10" y="${H + 10}" font-size="11">${esc(note)}</text></svg>`;
+  }
+
+  // 단순기울기 그림: 흑백 인쇄를 고려해 선 모양(실선·파선·점선)과 표식으로 구분
+  function slopeFigure(res, opt) {
+    const L = opt.labels, d = opt.dec, s = res.spec;
+    const W = 520, H = 340, m = { l: 64, r: 150, t: 20, b: 52 };
+    const pts = res.lines.flatMap(l => l.points);
+    const xs = pts.map(p => p.xRaw), ys = pts.map(p => p.y);
+    let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const padY = (y1 - y0) * 0.15 || 0.5; y0 -= padY; y1 += padY;
+    const padX = (x1 - x0) * 0.08; x0 -= padX; x1 += padX;
+    const sx = v => m.l + (v - x0) / (x1 - x0) * (W - m.l - m.r), sy = v => H - m.b - (v - y0) / (y1 - y0) * (H - m.t - m.b);
+    const ticks = (a, b) => { const step = niceStep((b - a) / 5); const out = []; for (let v = Math.ceil(a / step) * step; v <= b + 1e-9; v += step) out.push(+v.toFixed(10)); return out; };
+    function niceStep(r) { const p = Math.pow(10, Math.floor(Math.log10(r))), f = r / p; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p; }
+    let g = '';
+    g += `<line x1="${m.l}" y1="${H - m.b}" x2="${W - m.r}" y2="${H - m.b}" stroke="#000"/><line x1="${m.l}" y1="${m.t}" x2="${m.l}" y2="${H - m.b}" stroke="#000"/>`;
+    ticks(x0, x1).forEach(v => (g += `<line x1="${sx(v)}" y1="${H - m.b}" x2="${sx(v)}" y2="${H - m.b + 5}" stroke="#000"/><text x="${sx(v)}" y="${H - m.b + 19}" text-anchor="middle" font-size="11">${num(v, 1)}</text>`));
+    ticks(y0, y1).forEach(v => (g += `<line x1="${m.l - 5}" y1="${sy(v)}" x2="${m.l}" y2="${sy(v)}" stroke="#000"/><text x="${m.l - 8}" y="${sy(v) + 4}" text-anchor="end" font-size="11">${num(v, 1)}</text>`));
+    g += `<text x="${(m.l + W - m.r) / 2}" y="${H - 12}" text-anchor="middle" font-size="13">${esc(nameOf(L, s.x))}</text>`;
+    g += `<text transform="translate(16,${(m.t + H - m.b) / 2}) rotate(-90)" text-anchor="middle" font-size="13">${esc(nameOf(L, s.y))} (예측값)</text>`;
+    const dashes = ['', '7,4', '2,3'], marks = ['circle', 'square', 'triangle'];
+    const mark = (t, x, y) => t === 'circle' ? `<circle cx="${x}" cy="${y}" r="4" fill="#000"/>` : t === 'square' ? `<rect x="${x - 4}" y="${y - 4}" width="8" height="8" fill="#fff" stroke="#000" stroke-width="1.3"/>` : `<path d="M${x},${y - 5} L${x + 5},${y + 4} L${x - 5},${y + 4} z" fill="#fff" stroke="#000" stroke-width="1.3"/>`;
+    res.lines.forEach((l, i) => {
+      const [a, b] = l.points;
+      g += `<line x1="${sx(a.xRaw)}" y1="${sy(a.y)}" x2="${sx(b.xRaw)}" y2="${sy(b.y)}" stroke="#000" stroke-width="1.8" ${dashes[i] ? `stroke-dasharray="${dashes[i]}"` : ''}/>`;
+      g += mark(marks[i], sx(a.xRaw), sy(a.y)) + mark(marks[i], sx(b.xRaw), sy(b.y));
+      // 범례
+      const ly = m.t + 18 + i * 22, lx = W - m.r + 14;
+      g += `<line x1="${lx}" y1="${ly}" x2="${lx + 28}" y2="${ly}" stroke="#000" stroke-width="1.8" ${dashes[i] ? `stroke-dasharray="${dashes[i]}"` : ''}/>${mark(marks[i], lx + 14, ly)}`;
+      const lt = s.probe === 'binary' ? `${nameOf(L, s.w)} = ${num(l.wRaw, 0)}` : `${l.label.replace('번째 백분위', '%')} (${num(l.wRaw, d)})`;
+      g += `<text x="${lx + 34}" y="${ly + 4}" font-size="11">${esc(lt)}</text>`;
+    });
+    g += `<text x="${W - m.r + 14}" y="${m.t + 2}" font-size="11.5" font-weight="bold">${esc(nameOf(L, s.w))}</text>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="'Noto Sans KR','Malgun Gothic',sans-serif" style="background:#fff"><rect width="100%" height="100%" fill="#fff"/>${g}</svg>`;
+  }
+
+  function figures(res, opt) {
+    if (res.model === 'moderation') return [{ title: '조절모형 그림', svg: moderationFigure(res, opt) }, { title: '단순기울기 그림', svg: slopeFigure(res, opt) }];
+    return [{ title: MODEL_INFO[res.model].title + ' 그림', svg: mediationFigure(res, opt) }];
+  }
+
+  const CAUTION = [
+    '이 문장은 계산값을 정해진 문장 틀에 채운 초안임. 연구 설계와 가설에 맞게 연구자가 검토·수정해야 함.',
+    '횡단 설문 자료의 매개·조절 분석 결과만으로 인과관계나 시간적 선후관계가 입증되지 않음.',
+    '논문에는 실제 사용한 분석 도구와 설정을 기재해야 함. 이 도구로 분석했다면 SPSS PROCESS로 분석했다고 쓰면 안 됨.'
+  ];
+
+  const api = { methodText, tables, tableToHTML, tableToTSV, tableToCSV, resultText, figures, josa, num, pStr, MODEL_INFO, HAYES_REF, CAUTION };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.Report = api;
+})(typeof window !== 'undefined' ? window : this);
+
+</script>
+<script>
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const state = { rows: [], cols: [], fileName: '', scales: [], labels: {}, last: null };
+
+  // ---------- 알림 ----------
+  let toastT;
+  function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), 2200); }
+
+  // ---------- 파일 읽기 ----------
+  function parseDelimited(text) {
+    text = text.replace(/^﻿/, '');
+    const first = text.split(/\r?\n/, 1)[0];
+    const delim = [',', '\t', ';'].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+    const out = []; let row = [], field = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+      else if (c === '"') q = true;
+      else if (c === delim) { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(field); out.push(row); row = []; field = ''; }
+      else field += c;
+    }
+    if (field !== '' || row.length) { row.push(field); out.push(row); }
+    return out.filter(r => r.some(v => v.trim() !== ''));
+  }
+  function decode(buf) {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch (e) { return new TextDecoder('euc-kr').decode(buf); } // 한국어 엑셀 CSV(CP949)
+  }
+  function setTable(matrix, name) {
+    if (matrix.length < 2) throw new Error('변수 이름 줄과 자료가 최소 한 줄 이상 있어야 합니다.');
+    let header = matrix[0].map((h, i) => String(h).trim() || ('V' + (i + 1)));
+    const seen = {}; header = header.map(h => { if (seen[h]) { seen[h]++; return h + '_' + seen[h]; } seen[h] = 1; return h; });
+    state.rows = matrix.slice(1).map(r => { const o = {}; header.forEach((h, i) => (o[h] = r[i] == null ? '' : String(r[i]))); return o; });
+    state.cols = header; state.fileName = name; state.scales = []; state.labels = {};
+    refreshData();
+  }
+  let xlsxLoading = null;
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve();
+    if (!xlsxLoading) xlsxLoading = new Promise((res, rej) => {
+      const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload = res; s.onerror = () => rej(new Error('엑셀 읽기 도구를 불러오지 못했습니다. CSV로 저장해서 올려 주세요.')); document.head.appendChild(s);
+    });
+    return xlsxLoading;
+  }
+  $('file').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const buf = await f.arrayBuffer();
+      if (/\.xlsx?$/i.test(f.name)) {
+        await loadXLSX();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const m = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: true });
+        setTable(m, f.name);
+      } else setTable(parseDelimited(decode(buf)), f.name);
+      msg('runMsg', '');
+    } catch (err) { msg('runMsg', err.message, 'err'); }
+  });
+
+  // 예시 데이터: 가상 자료(실제 연구 자료 아님)
+  function sampleData() {
+    const rnd = Engine.mulberry32(20261109);
+    const norm = () => { let u = 0, v = 0; while (u === 0) u = rnd(); v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    const m = [['id', 'age', 'gender', 'alex', 'avoid', 'dysreg', 'support', 'distress']];
+    for (let i = 1; i <= 300; i++) {
+      const age = 19 + Math.floor(rnd() * 11), g = rnd() < .5 ? 0 : 1;
+      const X = 3 + .7 * norm(), M1 = 1 + .45 * X + .6 * norm(), M2 = .8 + .2 * X + .4 * M1 + .6 * norm(), W = 3.2 + .8 * norm();
+      const Y = .5 + .15 * X + .1 * M1 + .35 * M2 - .25 * W - .15 * (X - 3) * (W - 3.2) + .02 * (age - 24) + .6 * norm();
+      m.push([i, age, g, X.toFixed(3), M1.toFixed(3), M2.toFixed(3), W.toFixed(3), Y.toFixed(3)]);
+    }
+    m[5][4] = ''; m[121][7] = '';
+    return m;
+  }
+  const SAMPLE_LABELS = { alex: '감정표현불능증', avoid: '경험회피', dysreg: '정서조절곤란', distress: '심리적 고통', support: '사회적 지지', age: '연령', gender: '성별' };
+  function loadSample() {
+    setTable(sampleData(), '예시 데이터(가상 자료 300명)');
+    state.labels = Object.assign({}, SAMPLE_LABELS);
+    $('vX').value = 'alex'; $('vM1').value = 'avoid'; $('vM2').value = 'dysreg'; $('vY').value = 'distress'; $('vW').value = 'support';
+    renderLabels();
+  }
+  $('loadSample').addEventListener('click', () => { loadSample(); toast('예시 데이터를 불러왔습니다'); });
+
+  // ---------- 데이터 표시 ----------
+  function missingCodes() { return $('missing').value.split(',').map(t => t.trim()).filter(t => t !== '').map(Number).filter(v => isFinite(v)); }
+  function numericCols() {
+    const mc = missingCodes();
+    return state.cols.filter(c => {
+      let n = 0, bad = 0;
+      for (const r of state.rows) { const v = String(r[c]).trim(); if (v === '') continue; n++; if (!isFinite(Number(v))) bad++; }
+      return n > 0 && bad === 0;
+    });
+  }
+  function refreshData() {
+    const nc = numericCols();
+    const nonNum = state.cols.filter(c => !nc.includes(c));
+    $('dataInfo').innerHTML = state.rows.length
+      ? `<b>${esc(state.fileName)}</b> · 사례 <b>${state.rows.length}</b>명 · 변수 <b>${state.cols.length}</b>개` + (nonNum.length ? `<br>숫자가 아닌 값이 있어 분석에서 제외되는 변수: ${nonNum.map(esc).join(', ')}` : '')
+      : '';
+    const show = state.rows.slice(0, 8);
+    $('preview').innerHTML = state.rows.length ? `<table class="preview"><thead><tr>${state.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${show.map(r => `<tr>${state.cols.map(c => `<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '';
+    const opts = ['<option value="">— 선택 —</option>'].concat(nc.map(c => `<option value="${esc(c)}">${esc(c)}</option>`)).join('');
+    ['vX', 'vY', 'vM1', 'vM2', 'vM3', 'vW'].forEach(id => { const cur = $(id).value; $(id).innerHTML = opts; if (nc.includes(cur)) $(id).value = cur; });
+    $('covs').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
+    $('scItems').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
+    $('scRev').innerHTML = nc.map(c => `<label class="chip"><input type="checkbox" value="${esc(c)}">${esc(c)}</label>`).join('');
+    renderLabels(); renderScales();
+  }
+  $('missing').addEventListener('change', refreshData);
+
+  // ---------- 문항 점수 ----------
+  const checked = id => Array.from($(id).querySelectorAll('input:checked')).map(i => i.value);
+  $('scAdd').addEventListener('click', () => {
+    const name = $('scName').value.trim(), items = checked('scItems'), rev = checked('scRev').filter(r => items.includes(r));
+    const min = Number($('scMin').value), max = Number($('scMax').value), method = $('scMethod').value;
+    if (!name) return msg('scMsg', '새 변수 이름을 입력해 주세요.', 'err');
+    if (state.cols.includes(name)) return msg('scMsg', '이미 있는 변수 이름입니다.', 'err');
+    if (items.length < 1) return msg('scMsg', '포함할 문항을 선택해 주세요.', 'err');
+    if (!(max > min)) return msg('scMsg', '최대 응답값이 최소 응답값보다 커야 합니다.', 'err');
+    const res = Engine.scoreScale(state.rows, { name, items, reverse: rev, min, max, method }, missingCodes());
+    state.rows.forEach((r, i) => (r[name] = res.scores[i] === '' ? '' : String(res.scores[i])));
+    state.cols.push(name);
+    state.scales.push({ name, items, rev, min, max, method, alpha: res.alpha, n: res.nComplete, out: res.outOfRange });
+    msg('scMsg', res.outOfRange ? `범위(${min}~${max})를 벗어난 응답 ${res.outOfRange}개가 있습니다. 원자료를 확인해 주세요.` : '', res.outOfRange ? 'err' : '');
+    $('scName').value = '';
+    refreshData(); toast(`${name} 변수를 만들었습니다`);
+  });
+  function renderScales() {
+    $('scList').innerHTML = state.scales.map(s => `<div><b>${esc(s.name)}</b> = ${s.items.map(it => s.rev.includes(it) ? esc(it) + '(역)' : esc(it)).join(', ')}의 ${s.method === 'mean' ? '평균' : '합계'} · 역채점 = ${s.min}+${s.max}−응답 · 유효 ${s.n}명 · Cronbach α = ${s.alpha == null ? '—' : Report.num(s.alpha, 2)}</div>`).join('');
+  }
+
+  // ---------- 모형·변수 ----------
+  const model = () => document.querySelector('input[name=model]:checked').value;
+  $('models').addEventListener('change', () => {
+    document.querySelectorAll('.mcard').forEach(c => c.classList.toggle('on', c.querySelector('input').checked));
+    const m = model();
+    $('medRow').hidden = m === 'moderation'; $('modRow').hidden = m !== 'moderation';
+    $('fM2').hidden = $('fM3').hidden = m !== 'serial';
+    $('lM1').textContent = m === 'serial' ? '매개변인 M1 (먼저)' : '매개변인 M';
+    $('bootOpts').querySelectorAll('label')[0].hidden = $('bootOpts').querySelectorAll('label')[1].hidden = m === 'moderation';
+    $('modOpts').hidden = m !== 'moderation';
+    renderLabels();
+  });
+  function roleVars() {
+    const m = model(), v = id => $(id).value;
+    const meds = m === 'simple' ? [v('vM1')] : m === 'serial' ? [v('vM1'), v('vM2'), v('vM3')].filter(Boolean) : [];
+    const covs = checked('covs');
+    return { m, x: v('vX'), y: v('vY'), w: v('vW'), meds, covs };
+  }
+  function renderLabels() {
+    const r = roleVars();
+    const vars = [r.x].concat(r.m === 'moderation' ? [r.w] : r.meds, [r.y], r.covs).filter(Boolean);
+    const uniq = Array.from(new Set(vars));
+    $('labels').innerHTML = uniq.length ? uniq.map(v => `<code>${esc(v)}</code><input type="text" id="lab_${cssId(v)}" data-var="${esc(v)}" value="${esc(state.labels[v] || v)}">`).join('') : '<span class="hint" style="grid-column:1/-1">변수를 지정하면 여기에서 이름을 바꿀 수 있습니다.</span>';
+  }
+  $('labels').addEventListener('input', e => { if (e.target.dataset.var) state.labels[e.target.dataset.var] = e.target.value.trim() || e.target.dataset.var; });
+  ['vX', 'vY', 'vM1', 'vM2', 'vM3', 'vW'].forEach(id => $(id).addEventListener('change', renderLabels));
+  $('covs').addEventListener('change', e => { e.target.closest('.chip').classList.toggle('on', e.target.checked); renderLabels(); });
+  ['scItems', 'scRev'].forEach(id => $(id).addEventListener('change', e => e.target.closest('.chip').classList.toggle('on', e.target.checked)));
+
+  // ---------- 실행 ----------
+  function msg(id, t, kind) { $(id).innerHTML = t ? `<div class="msg ${kind || ''}">${esc(t)}</div>` : ''; }
+  $('run').addEventListener('click', () => {
+    if (!state.rows.length) return msg('runMsg', '먼저 데이터를 불러와 주세요.', 'err');
+    const r = roleVars();
+    if (!r.x || !r.y) return msg('runMsg', 'X와 Y를 지정해 주세요.', 'err');
+    if (r.m === 'simple' && !r.meds[0]) return msg('runMsg', '매개변인 M을 지정해 주세요.', 'err');
+    if (r.m === 'serial' && r.meds.length < 2) return msg('runMsg', '순차매개는 매개변인 M1과 M2가 필요합니다.', 'err');
+    if (r.m === 'moderation' && !r.w) return msg('runMsg', '조절변인 W를 지정해 주세요.', 'err');
+    const roles = [r.x, r.y].concat(r.m === 'moderation' ? [r.w] : r.meds);
+    if (r.covs.some(c => roles.includes(c))) return msg('runMsg', '공변인으로 선택한 변수가 다른 역할에도 지정되어 있습니다.', 'err');
+    $('run').disabled = true; $('run').textContent = '계산 중…'; msg('runMsg', '');
+    setTimeout(() => {
+      try {
+        const conf = Number($('oConf').value), mc = missingCodes();
+        let res;
+        if (r.m === 'moderation') res = Engine.moderation(state.rows, { x: r.x, w: r.w, y: r.y, covariates: r.covs, center: $('oCenter').value, probe: $('oProbe').value, conf, missingCodes: mc });
+        else res = Engine.mediation(state.rows, { x: r.x, mediators: r.meds, y: r.y, covariates: r.covs, boot: Number($('oBoot').value), seed: Number($('oSeed').value) >>> 0, conf, missingCodes: mc });
+        state.last = res;
+        renderResults(res);
+        if (window.matchMedia('(max-width: 900px)').matches) $('results').scrollIntoView({ behavior: 'smooth' });
+      } catch (err) { msg('runMsg', err.message, 'err'); }
+      $('run').disabled = false; $('run').textContent = '분석 실행';
+    }, 30);
+  });
+
+  // ---------- 결과 화면 ----------
+  function opts() { return { labels: Object.assign({}, state.labels), dec: Number($('oDec').value), decInd: Number($('oDecInd').value), toolName: $('oTool').value.trim() || '웹 기반 분석 도구' }; }
+  function renderResults(res) {
+    const o = opts(), info = Report.MODEL_INFO[res.model];
+    const method = Report.methodText(res, o), text = Report.resultText(res, o), tabs = Report.tables(res, o), figs = Report.figures(res, o);
+    state.view = { method, text, tabs, figs, o };
+    const s = res.spec;
+    const setLines = [
+      `모형: ${info.title} (Hayes 모형 번호 기준 ${info.hayes}에 해당하는 구조)`,
+      `X = ${s.x}` + (s.mediators ? `, 매개 = ${s.mediators.join(' → ')}` : `, W = ${s.w}`) + `, Y = ${s.y}`,
+      `공변인 = ${s.covariates.length ? s.covariates.join(', ') : '없음'}`,
+      `분석 사례 = ${res.sample.n}명 (전체 ${res.sample.nTotal}명 중 결측 ${res.sample.dropped}명 목록별 삭제)`,
+      `추정 = OLS 회귀, 일반 표준오차, 신뢰수준 ${Math.round(s.conf * 100)}%`
+    ];
+    if (s.boot) setLines.push(`간접효과 = 사례 재표집 부트스트랩 ${s.boot}회, 시드 ${s.seed}, 백분위수 구간` + (res.bootFailed ? ` (계산 불가 표본 ${res.bootFailed}개 다시 뽑음)` : ''));
+    if (res.model === 'moderation') setLines.push(`상호작용항 = ${s.center === 'mean' ? 'X, W 평균중심화 후 곱' : '원점수 곱'}, 조건부 효과 지점 = ${s.probe === 'binary' ? 'W의 두 값' : s.probe === 'meansd' ? '평균 ±1SD' : '16·50·84 백분위'}`);
+    const warn = (res.warnings || []).map(w => `<div class="msg err">${esc(w)}</div>`).join('');
+    $('results').innerHTML = `
+      ${warn}
+      <section class="rcard">
+        <div class="rhead"><h3>분석 방법</h3><div class="btns"><button class="small" data-copy="method">문단 복사</button></div></div>
+        <div class="paper" id="methodBox" contenteditable="true" spellcheck="false"><p>${esc(method)}</p></div>
+        <pre class="settings">${esc(setLines.join('\n'))}</pre>
+      </section>
+      <section class="rcard">
+        <div class="rhead"><h3>결과 서술 초안</h3><div class="btns"><button class="small" data-copy="text">문단 복사</button></div></div>
+        <p class="hint">숫자는 아래 표와 같은 계산값입니다. 문장은 바로 고칠 수 있고, 고친 내용이 복사됩니다.</p>
+        <div class="paper" id="textBox" contenteditable="true" spellcheck="false">${text.map(p => `<p>${esc(p)}</p>`).join('')}</div>
+        <div class="caution"><b>검토가 필요합니다</b><ul>${Report.CAUTION.map(c => `<li>${esc(c)}</li>`).join('')}</ul></div>
+      </section>
+      ${tabs.map((t, i) => `
+      <section class="rcard">
+        <div class="rhead"><h3>표 ${i + 1}</h3><div class="btns"><button class="small" data-copytab="${i}">표 복사 (워드·엑셀)</button><button class="small" data-csv="${i}">CSV 저장</button></div></div>
+        <div class="tablewrap" id="tab${i}">${Report.tableToHTML(t, i)}</div>
+      </section>`).join('')}
+      ${figs.map((f, i) => `
+      <section class="rcard">
+        <div class="rhead"><h3>${esc(f.title)}</h3><div class="btns"><button class="small" data-png="${i}">PNG 저장</button><button class="small" data-svg="${i}">SVG 저장</button></div></div>
+        <div class="figbox">${f.svg}</div>
+      </section>`).join('')}
+      <section class="rcard">
+        <div class="rhead"><h3>전체 저장</h3></div>
+        <div class="btns"><button data-report>결과 보고서 (HTML, 워드에서 열기)</button><button data-settings>분석 설정 기록 (JSON)</button></div>
+        <p class="hint">참고 문헌: ${esc(Report.HAYES_REF)}</p>
+      </section>`;
+  }
+
+  // ---------- 복사·저장 ----------
+  async function copyText(text, html) {
+    try {
+      if (html && window.ClipboardItem && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+      } else await navigator.clipboard.writeText(text);
+      toast('복사했습니다');
+    } catch (e) {
+      try { await navigator.clipboard.writeText(text); toast('복사했습니다'); }
+      catch (e2) { toast('자동 복사가 막혀 있습니다. 내용을 직접 선택해 복사해 주세요.'); }
+    }
+  }
+  let dlCap = null;
+  if (window.claude && typeof window.claude.use === 'function') window.claude.use('downloads').then(d => (dlCap = d)).catch(() => {});
+  async function saveFile(filename, data, mime) {
+    if (dlCap) {
+      try { await dlCap.save({ filename, data }); toast('저장했습니다'); return; }
+      catch (e) { if (e && e.code === 'declined') return; }
+    }
+    const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  function svgToPng(svg) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => {
+        const s = 3, c = document.createElement('canvas'); c.width = img.width * s; c.height = img.height * s;
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.scale(s, s); g.drawImage(img, 0, 0);
+        c.toBlob(b => (b ? res(b) : rej(new Error('PNG 변환 실패'))), 'image/png');
+      };
+      img.onerror = () => rej(new Error('그림 변환 실패'));
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    });
+  }
+  const paras = id => Array.from($(id).querySelectorAll('p')).map(p => p.innerText.trim()).filter(Boolean);
+  const stamp = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
+  const modelKo = () => Report.MODEL_INFO[state.last.model].title;
+  function reportHTML() {
+    const v = state.view;
+    const body = `<h1>${esc(modelKo())} 분석 결과</h1><h2>분석 방법</h2>${paras('methodBox').map(p => `<p>${esc(p)}</p>`).join('')}<h2>결과</h2>${paras('textBox').map(p => `<p>${esc(p)}</p>`).join('')}` +
+      v.tabs.map((t, i) => Report.tableToHTML(t, i)).join('<br>') + v.figs.map((f, i) => `<p><b>그림 ${i + 1}.</b> ${esc(f.title)}</p>${f.svg}`).join('') +
+      `<h2>검토 사항</h2><ul>${Report.CAUTION.map(c => `<li>${esc(c)}</li>`).join('')}</ul><p>${esc(Report.HAYES_REF)}</p>`;
+    return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(modelKo())} 분석 결과</title><style>body{font-family:'Batang','Noto Serif KR',serif;max-width:800px;margin:24px auto;line-height:1.8;color:#000}table{border-collapse:collapse;margin:8px 0}caption{text-align:left}thead th{border-top:1.5px solid #000;border-bottom:1px solid #000;padding:4px 8px}td{padding:3px 8px;text-align:center}tbody tr:last-child td{border-bottom:1.5px solid #000}.tnote{font-size:13px}</style></head><body>${body}</body></html>`;
+  }
+  $('results').addEventListener('click', async e => {
+    const b = e.target.closest('button'); if (!b || !state.view) return;
+    const v = state.view, d = b.dataset;
+    if (d.copy === 'method') return copyText(paras('methodBox').join('\n\n'));
+    if (d.copy === 'text') return copyText(paras('textBox').join('\n\n'), paras('textBox').map(p => `<p>${esc(p)}</p>`).join(''));
+    if (d.copytab != null) { const t = v.tabs[+d.copytab]; return copyText(Report.tableToTSV(t), Report.tableToHTML(t, +d.copytab).replace('<table class="apa">', '<table style="border-collapse:collapse;font-family:Batang,serif">')); }
+    if (d.csv != null) return saveFile(`표${+d.csv + 1}_${stamp()}.csv`, '﻿' + Report.tableToCSV(v.tabs[+d.csv]), 'text/csv');
+    if (d.svg != null) return saveFile(`그림${+d.svg + 1}_${stamp()}.svg`, v.figs[+d.svg].svg, 'image/svg+xml');
+    if (d.png != null) { try { return saveFile(`그림${+d.png + 1}_${stamp()}.png`, await svgToPng(v.figs[+d.png].svg), 'image/png'); } catch (err) { return toast(err.message); } }
+    if ('report' in d) return saveFile(`${modelKo()}_결과_${stamp()}.html`, reportHTML(), 'text/html');
+    if ('settings' in d) {
+      const rec = { 도구: '모형분석 결과작성기 (MVP)', 생성일: new Date().toISOString(), 파일: state.fileName, 결측치코드: missingCodes(), 문항점수: state.scales, 설정: state.last.spec, 변인이름: v.o.labels, 분석사례: state.last.sample };
+      return saveFile(`분석설정_${stamp()}.json`, JSON.stringify(rec, null, 2), 'application/json');
+    }
+  });
+
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function cssId(s) { return String(s).replace(/[^A-Za-z0-9_-]/g, c => '_' + c.charCodeAt(0)); }
+
+  // 처음 열면 예시 데이터로 순차매개 결과를 보여 줌
+  loadSample();
+  document.querySelector('input[value=serial]').checked = true;
+  $('models').dispatchEvent(new Event('change'));
+  $('run').click();
+})();
+</script>
+
+</body>
+</html>
