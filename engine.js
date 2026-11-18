@@ -115,20 +115,40 @@
     const coef = inv.map(row => row.reduce((s, v, j) => s + v * Xty[j], 0));
     if (opts.coefOnly) return { coef };
     let sse = 0; const ym = mean(y); let sst = 0;
+    const fitted = new Array(n), resid = new Array(n), lev = new Array(n);
     for (let i = 0; i < n; i++) {
       let fit = 0; for (let j = 0; j < p; j++) fit += X[i][j] * coef[j];
-      sse += (y[i] - fit) ** 2; sst += (y[i] - ym) ** 2;
+      fitted[i] = fit; resid[i] = y[i] - fit;
+      sse += resid[i] ** 2; sst += (y[i] - ym) ** 2;
+      // 레버리지 h_ii = x_i' (X'X)^-1 x_i
+      let h = 0; for (let a = 0; a < p; a++) { let t = 0; for (let b = 0; b < p; b++) t += inv[a][b] * X[i][b]; h += X[i][a] * t; }
+      lev[i] = h;
     }
     const df = n - p, mse = sse / df;
     const conf = opts.conf || 0.95, tc = tCrit(conf, df);
     const names = ['상수'].concat(cols.map(c => c.name));
+    // 공분산 행렬: 일반(OLS) 또는 HC3 = (X'X)^-1 [Σ x_i x_i' e_i²/(1-h_i)²] (X'X)^-1
+    let cov;
+    const seType = opts.se === 'hc3' ? 'hc3' : 'ols';
+    if (seType === 'hc3') {
+      if (lev.some(h => h >= 1 - 1e-10)) throw new Error('레버리지가 1인 사례가 있어 HC3 표준오차를 계산할 수 없음(한 사례가 회귀식을 완전히 결정함)');
+      const M = Array.from({ length: p }, () => new Array(p).fill(0));
+      for (let i = 0; i < n; i++) { const w = resid[i] ** 2 / (1 - lev[i]) ** 2; for (let a = 0; a < p; a++) for (let b = 0; b < p; b++) M[a][b] += w * X[i][a] * X[i][b]; }
+      const IM = inv.map(r => M[0].map((_, b) => r.reduce((s2, v, k2) => s2 + v * M[k2][b], 0)));
+      cov = IM.map(r => inv[0].map((_, b) => r.reduce((s2, v, k2) => s2 + v * inv[k2][b], 0)));
+    } else cov = inv.map(r => r.map(v => v * mse));
     const rows = coef.map((b, j) => {
-      const se = Math.sqrt(mse * inv[j][j]), t = b / se;
+      const se = Math.sqrt(cov[j][j]), t = b / se;
       return { name: names[j], b, se, t, p: tPvalue(t, df), llci: b - tc * se, ulci: b + tc * se };
     });
     const r2 = 1 - sse / sst, k = p - 1;
-    const F = (r2 / k) / ((1 - r2) / df);
-    return { n, rows, coef, cov: inv.map(r => r.map(v => v * mse)), r2, R: Math.sqrt(r2), mse, F, df1: k, df2: df, pF: fPvalue(F, k, df), tcrit: tc };
+    let F;
+    if (seType === 'hc3') {
+      // 기울기 전체에 대한 Wald 검정: F = b' V^-1 b / k (V = HC3 공분산의 기울기 부분)
+      const bs = coef.slice(1), Vs = cov.slice(1).map(r => r.slice(1)), Vi = invert(Vs);
+      F = Vi ? bs.reduce((s2, bi, a) => s2 + bi * Vi[a].reduce((s3, v, c) => s3 + v * bs[c], 0), 0) / k : NaN;
+    } else F = (r2 / k) / ((1 - r2) / df);
+    return { n, rows, coef, cov, seType, r2, R: Math.sqrt(r2), mse, F, df1: k, df2: df, pF: fPvalue(F, k, df), tcrit: tc, fitted, resid, lev, p };
   }
 
   // ---------- 난수(시드 고정) ----------
@@ -162,13 +182,44 @@
   // 분석에 쓰는 변수 모두에 값이 있는 사례만 사용(목록별 삭제)
   function prepare(rows, vars, missingCodes) {
     const out = {}; vars.forEach(v => (out[v] = []));
-    let dropped = 0;
-    for (const r of rows) {
+    let dropped = 0; const idx = [];
+    rows.forEach((r, i) => {
       const vals = vars.map(v => toNumber(r[v], missingCodes));
-      if (vals.some(x => isNaN(x))) { dropped++; continue; }
-      vars.forEach((v, j) => out[v].push(vals[j]));
-    }
-    return { data: out, n: rows.length - dropped, dropped, nTotal: rows.length };
+      if (vals.some(x => isNaN(x))) { dropped++; return; }
+      vars.forEach((v, j) => out[v].push(vals[j])); idx.push(i);
+    });
+    return { data: out, n: rows.length - dropped, dropped, nTotal: rows.length, idx };
+  }
+
+  // 분석 표본에서 값이 하나뿐인 변수(상수)를 찾아 구체적으로 알림
+  function assertNotConstant(D, vars) {
+    vars.forEach(v => { if (uniqueVals(D[v]).length < 2) throw new Error(`변수 '${v}'의 값이 분석 표본에서 모두 같음(상수, 값 = ${D[v][0]}). 상수 변수는 회귀식에 넣을 수 없음`); });
+  }
+  function collinearError(outcome, preds) {
+    return new Error(`회귀식(종속변인 '${outcome}')의 예측변인 ${preds.map(p => `'${p}'`).join(', ')} 사이에 완전한 선형 종속이 있어 계수를 추정할 수 없음. 같은 정보를 담은 변수(예: 합계와 평균, 같은 변수의 복사본)가 함께 들어갔는지 확인 필요`);
+  }
+
+  // ---------- 회귀 진단 ----------
+  // 각 회귀식에 실제로 투입된 예측변수와 분석 표본으로 계산함
+  // VIF_j = 1 / (1 − R²_j), R²_j: 예측변수 j를 같은 식의 나머지 예측변수로 회귀한 결정계수
+  // Cook's D_i = e_i² h_i / (p · MSE · (1 − h_i)²), 표준화 잔차 r_i = e_i / √(MSE (1 − h_i))
+  function diagnose(outcome, cols, fit, idx) {
+    const n = fit.n, p = fit.p;
+    const vif = cols.map((c, j) => {
+      if (cols.length < 2) return { name: c.name, vif: 1, tol: 1 };
+      const others = cols.filter((_, k) => k !== j);
+      const f = ols(c.values, others, { conf: 0.95 });
+      if (!f) return { name: c.name, vif: Infinity, tol: 0 };
+      return { name: c.name, vif: 1 / (1 - f.r2), tol: 1 - f.r2 };
+    });
+    const cook = fit.resid.map((e, i) => (e * e * fit.lev[i]) / (p * fit.mse * (1 - fit.lev[i]) ** 2));
+    const stdres = fit.resid.map((e, i) => e / Math.sqrt(fit.mse * (1 - fit.lev[i])));
+    const cut = 4 / n;
+    const order = cook.map((d, i) => i).sort((a, b) => cook[b] - cook[a]);
+    const top = order.slice(0, 5).map(i => ({ row: idx[i] + 1, cook: cook[i], lev: fit.lev[i], stdres: stdres[i] }));
+    return { outcome, n, p, vif, cook, stdres, fitted: fit.fitted, lev: fit.lev, rows: idx.map(i => i + 1),
+      maxCook: Math.max(...cook), nCookOver: cook.filter(d => d > cut).length, nCookOver1: cook.filter(d => d > 1).length, cookCut: cut,
+      nStdresOver3: stdres.filter(r => Math.abs(r) > 3).length, top };
   }
 
   function standardizedRows(fit, outcomeVals, colVals) {
@@ -184,7 +235,7 @@
     if (!meds || meds.length < 1) throw new Error('매개변인을 1개 이상 지정해야 함');
     const allVars = [spec.x].concat(meds, [spec.y], covs);
     if (new Set(allVars).size !== allVars.length) throw new Error('한 변수를 두 가지 역할에 동시에 지정할 수 없음');
-    const conf = spec.conf || 0.95, B = spec.boot == null ? 5000 : spec.boot, seed = spec.seed == null ? 1 : spec.seed;
+    const conf = spec.conf || 0.95, B = spec.boot == null ? 5000 : spec.boot, seed = spec.seed == null ? 1 : spec.seed, se = spec.se === 'hc3' ? 'hc3' : 'ols';
     const prep = prepare(rows, allVars, spec.missingCodes);
     const D = prep.data, n = prep.n, k = meds.length;
     if (n < allVars.length + 3) throw new Error('분석 가능한 사례 수가 너무 적음 (n=' + n + ')');
@@ -230,10 +281,17 @@
       });
     }
 
-    const fits = fitAll(null, false);
-    if (!fits) throw new Error('회귀식을 계산할 수 없음(변수 간 완전 공선성 등)');
+    assertNotConstant(D, allVars);
+    const fits = [];
+    for (const e of eqDefs) {
+      const f = ols(D[e.outcome], e.preds.map(p => ({ name: p, values: D[p] })), { conf, se });
+      if (!f) throw collinearError(e.outcome, e.preds);
+      fits.push(f);
+    }
     fits.forEach((f, i) => standardizedRows(f, D[eqDefs[i].outcome], eqDefs[i].preds.map(p => D[p])));
-    const totalFit = ols(D[spec.y], totalDef.preds.map(p => ({ name: p, values: D[p] })), { conf });
+    const totalFit = ols(D[spec.y], totalDef.preds.map(p => ({ name: p, values: D[p] })), { conf, se });
+    if (!totalFit) throw collinearError(spec.y, totalDef.preds);
+    const diagnostics = eqDefs.map((e, i) => diagnose(e.outcome, e.preds.map(p => ({ name: p, values: D[p] })), fits[i], prep.idx));
     standardizedRows(totalFit, D[spec.y], totalDef.preds.map(p => D[p]));
     const P = paths(fits);
     const ind = indirects(P);
@@ -276,10 +334,26 @@
       ind[j], bootInd[j]));
     if (k > 1) indirectRows.push(effRow('총간접효과', null, totalInd, bootTot));
 
+    // ---------- 추가 검정 (분석 옵션에서 선택한 경우에만 표·문장으로 보고) ----------
+    // 간접효과 경로 간 차이(Hayes PROCESS의 contrast와 같은 방식): 같은 부트스트랩 표본마다 두 간접효과의 차이를 구해
+    //   SE(표본 표준편차)와 백분위수 신뢰구간을 산출. raw = Ind_i − Ind_j, abs = |Ind_i| − |Ind_j|
+    //   표에 쓰는 경로 순서가 보고 형식에 따라 달라지므로 두 방향(i − j, j − i)을 모두 부트스트랩 값에서 직접 계산함
+    //   (부호만 바꿔 유도하면 bootCI의 하한·상한 순위 계산에서 소수 오차로 한 순위 어긋날 수 있음)
+    const contrasts = [];
+    if (routes.length > 1 && bootInd[0].length) {
+      const one = (f, i, j) => {
+        const est = f(ind[i], ind[j]), draws = bootInd[i].map((v, t) => f(v, bootInd[j][t])), c = bootCI(draws, conf);
+        return { effect: est, bootSE: sd(draws), llci: c[0], ulci: c[1], significant: !(c[0] <= 0 && c[1] >= 0) };
+      };
+      for (let i = 0; i < routes.length; i++) for (let j = 0; j < routes.length; j++) if (i !== j)
+        contrasts.push({ i, j, raw: one((p, q) => p - q, i, j), abs: one((p, q) => Math.abs(p) - Math.abs(q), i, j) });
+    }
+
     const cpRow = fits[k].rows[1], cRow = totalFit.rows[1];
     return {
       model: k === 1 ? 'simple' : 'serial',
-      spec: { x: spec.x, mediators: meds, y: spec.y, covariates: covs, boot: B, seed, conf },
+      spec: { x: spec.x, mediators: meds, y: spec.y, covariates: covs, boot: B, seed, conf, se },
+      diagnostics,
       sample: { nTotal: prep.nTotal, n, dropped: prep.dropped },
       descriptives: allVars.map(v => ({ name: v, mean: mean(D[v]), sd: sd(D[v]) })),
       equations: eqDefs.map((e, i) => ({ outcome: e.outcome, predictors: e.preds, fit: fits[i] })),
@@ -288,6 +362,7 @@
       total: Object.assign({ std: cRow.b * sdX / sdY }, cRow),
       direct: Object.assign({ std: cpRow.b * sdX / sdY }, cpRow),
       indirect: indirectRows,
+      contrasts,
       bootFailed: failed,
       warnings,
       medLabel
@@ -300,10 +375,11 @@
     const covs = spec.covariates || [];
     const allVars = [spec.x, spec.w, spec.y].concat(covs);
     if (new Set(allVars).size !== allVars.length) throw new Error('한 변수를 두 가지 역할에 동시에 지정할 수 없음');
-    const conf = spec.conf || 0.95;
+    const conf = spec.conf || 0.95, se = spec.se === 'hc3' ? 'hc3' : 'ols';
     const prep = prepare(rows, allVars, spec.missingCodes);
     const D = prep.data, n = prep.n;
     if (n < allVars.length + 4) throw new Error('분석 가능한 사례 수가 너무 적음 (n=' + n + ')');
+    assertNotConstant(D, allVars);
     const center = spec.center || 'none';
     const mx = mean(D[spec.x]), mw = mean(D[spec.w]);
     const X = center === 'mean' ? D[spec.x].map(v => v - mx) : D[spec.x];
@@ -312,11 +388,12 @@
     const intName = spec.x + ' × ' + spec.w;
     const cols = [{ name: spec.x, values: X }, { name: spec.w, values: W }, { name: intName, values: XW }]
       .concat(covs.map(c => ({ name: c, values: D[c] })));
-    const fit = ols(D[spec.y], cols, { conf });
-    if (!fit) throw new Error('회귀식을 계산할 수 없음(변수 간 완전 공선성 등)');
+    const fit = ols(D[spec.y], cols, { conf, se });
+    if (!fit) throw collinearError(spec.y, cols.map(c => c.name));
     const reduced = ols(D[spec.y], cols.filter((_, j) => j !== 2), { conf });
     const dR2 = fit.r2 - reduced.r2;
-    const Fch = dR2 / ((1 - fit.r2) / fit.df2);
+    // 상호작용항 검정: 일반 SE는 R² 변화량 F, HC3는 상호작용 계수의 강건 Wald 검정(F = t²)
+    const Fch = se === 'hc3' ? fit.rows[3].t ** 2 : dR2 / ((1 - fit.r2) / fit.df2);
     const change = { dR2, F: Fch, df1: 1, df2: fit.df2, p: fPvalue(Fch, 1, fit.df2) };
 
     const b1 = fit.coef[1], b3 = fit.coef[3];
@@ -400,13 +477,92 @@
 
     return {
       model: 'moderation',
-      spec: { x: spec.x, w: spec.w, y: spec.y, covariates: covs, center, probe: probeType, conf },
+      spec: { x: spec.x, w: spec.w, y: spec.y, covariates: covs, center, probe: probeType, conf, se },
+      diagnostics: [diagnose(spec.y, cols, fit, prep.idx)],
       sample: { nTotal: prep.nTotal, n, dropped: prep.dropped },
       descriptives: allVars.map(v => ({ name: v, mean: mean(D[v]), sd: sd(D[v]) })),
       equation: { outcome: spec.y, fit },
       change, conditional: cond, jn, lines, means: { x: mx, w: mw },
       warnings: []
     };
+  }
+
+  // ---------- 신뢰도 ----------
+  // matrix: 사례 × 문항(역채점 반영 후). 결측 없는 행만 전달
+  function alphaOf(matrix) {
+    const k = matrix[0] ? matrix[0].length : 0;
+    if (k < 2 || matrix.length < 3) return null;
+    const itemVar = Array.from({ length: k }, (_, j) => sd(matrix.map(r => r[j])) ** 2);
+    const totVar = sd(matrix.map(r => r.reduce((a, b) => a + b, 0))) ** 2;
+    if (!(totVar > 0)) return null;
+    return (k / (k - 1)) * (1 - itemVar.reduce((a, b) => a + b, 0) / totVar);
+  }
+  function itemMatrix(rows, def, idx, missingCodes) {
+    const rev = new Set(def.reverse || def.rev || []);
+    const out = [];
+    (idx || rows.map((_, i) => i)).forEach(i => {
+      const vals = def.items.map(it => { const v = toNumber(rows[i][it], missingCodes); return rev.has(it) ? def.min + def.max - v : v; });
+      if (!vals.some(v => isNaN(v))) out.push(vals);
+    });
+    return out;
+  }
+
+  // ---------- 기초통계 ----------
+  // spec: {vars:[분석 변수], types:{변수: 'continuous'|'binary'|'categorical'|'id'}, missingCodes, scales:[{name, items, rev, min, max, method}]}
+  // 기술통계·빈도·상관·신뢰도는 모두 모형 분석과 같은 분석 표본(목록별 삭제 후)에서 계산함
+  function basic(rows, spec) {
+    const vars = spec.vars, types = spec.types || {};
+    const prep = prepare(rows, vars, spec.missingCodes);
+    const D = prep.data, n = prep.n;
+    const missing = vars.map(v => {
+      const m = rows.filter(r => isNaN(toNumber(r[v], spec.missingCodes))).length;
+      return { name: v, nMissing: m, pct: 100 * m / rows.length };
+    });
+    const isCat = v => types[v] === 'binary' || types[v] === 'categorical';
+    const cont = vars.filter(v => !isCat(v)).map(v => {
+      const a = D[v]; return { name: v, n: a.length, mean: mean(a), sd: sd(a), min: Math.min(...a), max: Math.max(...a), skew: skewness(a), kurt: kurtosis(a) };
+    });
+    const cat = vars.filter(isCat).map(v => ({ name: v, levels: uniqueVals(D[v]).map(val => { const c = D[v].filter(x => x === val).length; return { value: val, n: c, pct: 100 * c / n }; }) }));
+    // Pearson 상관: 연속형 변수끼리만
+    const cv = cont.map(c => c.name);
+    const r = cv.map(a => cv.map(b => pearson(D[a], D[b])));
+    const pm = r.map(row => row.map(x => { if (Math.abs(x) >= 1) return 0; const t = x * Math.sqrt((n - 2) / (1 - x * x)); return tPvalue(t, n - 2); }));
+    // 신뢰도 대상: 모형의 척도 변인(spec.scaleVars, 기본은 연속형 분석 변수 전체)
+    const relVars = (spec.scaleVars || vars).filter(v => vars.includes(v) && !isCat(v));
+    const reliability = relVars.map(v => {
+      const def = (spec.scales || []).find(sc => sc.name === v);
+      if (!def) return { name: v, available: false };
+      const mat = itemMatrix(rows, def, prep.idx, spec.missingCodes);
+      return { name: v, available: true, inModel: true, k: def.items.length, items: def.items, rev: def.rev || def.reverse || [], method: def.method, min: def.min, max: def.max, n: mat.length, alpha: alphaOf(mat) };
+    });
+    // 모형에 쓰지 않은 척도(하위요인 등)의 신뢰도: 같은 분석 표본에서 문항이 모두 있는 사례로 계산
+    (spec.scales || []).filter(sc => !relVars.includes(sc.name)).forEach(def => {
+      const mat = itemMatrix(rows, def, prep.idx, spec.missingCodes);
+      reliability.push({ name: def.name, available: true, inModel: false, k: def.items.length, items: def.items, rev: def.rev || def.reverse || [], method: def.method, min: def.min, max: def.max, n: mat.length, alpha: alphaOf(mat) });
+    });
+    // 연구대상 특성(인구통계): 모형에 넣지 않은 변수도 분석 표본의 사례로 계산. 해당 변수의 결측은 따로 셈
+    const demo = (spec.demoVars || []).map(v => {
+      const vals = prep.idx.map(i => toNumber(rows[i][v], spec.missingCodes)), valid = vals.filter(x => !isNaN(x)), nMissing = vals.length - valid.length;
+      if (isCat(v)) return { name: v, kind: 'cat', n: valid.length, nMissing, levels: uniqueVals(valid).map(val => { const c = valid.filter(x => x === val).length; return { value: val, n: c, pct: 100 * c / vals.length }; }) };
+      return { name: v, kind: 'cont', n: valid.length, nMissing, mean: valid.length ? mean(valid) : null, sd: valid.length > 1 ? sd(valid) : null, min: valid.length ? Math.min(...valid) : null, max: valid.length ? Math.max(...valid) : null };
+    });
+    return { nTotal: prep.nTotal, n, dropped: prep.dropped, missing, cont, cat, corr: { vars: cv, r, p: pm, n }, reliability, demo };
+  }
+  // 왜도·첨도: 표본 보정 통계량(SPSS·Excel과 같은 정의, 첨도는 정규분포 = 0인 초과첨도)
+  function skewness(a) {
+    const n = a.length, m = mean(a), s = sd(a);
+    if (n < 3 || !(s > 0)) return null;
+    return (n / ((n - 1) * (n - 2))) * a.reduce((t, v) => t + ((v - m) / s) ** 3, 0);
+  }
+  function kurtosis(a) {
+    const n = a.length, m = mean(a), s = sd(a);
+    if (n < 4 || !(s > 0)) return null;
+    return (n * (n + 1) / ((n - 1) * (n - 2) * (n - 3))) * a.reduce((t, v) => t + ((v - m) / s) ** 4, 0) - 3 * (n - 1) ** 2 / ((n - 2) * (n - 3));
+  }
+  function pearson(a, b) {
+    const ma = mean(a), mb = mean(b); let sab = 0, saa = 0, sbb = 0;
+    for (let i = 0; i < a.length; i++) { const x = a[i] - ma, y = b[i] - mb; sab += x * y; saa += x * x; sbb += y * y; }
+    return sab / Math.sqrt(saa * sbb);
   }
 
   // ---------- 문항 채점 ----------
@@ -426,19 +582,15 @@
       const s = vals.reduce((a, b) => a + b, 0);
       return def.method === 'sum' ? s : s / k;
     });
-    let alpha = null;
-    if (k >= 2 && complete.length > 2) {
-      const itemVar = def.items.map((_, j) => { const c = complete.map(r => r[j]); return sd(c) ** 2; });
-      const totVar = sd(complete.map(r => r.reduce((a, b) => a + b, 0))) ** 2;
-      alpha = (k / (k - 1)) * (1 - itemVar.reduce((a, b) => a + b, 0) / totVar);
-    }
+    const alpha = k >= 2 && complete.length > 2 ? alphaOf(complete) : null;
     // 범위 밖 응답 확인
     let outOfRange = 0;
     rows.forEach(r => def.items.forEach(it => { const v = toNumber(r[it], missingCodes); if (!isNaN(v) && (v < def.min || v > def.max)) outOfRange++; }));
     return { scores, alpha, nComplete: complete.length, outOfRange };
   }
 
-  const api = { ols, mediation, moderation, scoreScale, tPvalue, fPvalue, tCrit, percentile, bootCI, mulberry32, mean, sd, prepare };
+  const VERSION = '0.6.0';
+  const api = { VERSION, ols, diagnose, mediation, moderation, scoreScale, basic, alphaOf, pearson, skewness, kurtosis, tPvalue, fPvalue, tCrit, percentile, bootCI, mulberry32, mean, sd, prepare };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
 })(typeof window !== 'undefined' ? window : this);
