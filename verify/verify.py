@@ -77,6 +77,20 @@ def check_med(key):
         close(e['indirect'][j]['bootSE'], boots[:, j].std(ddof=1), f'{key} ind{j+1} bootSE')
     if k > 1:
         lo, hi = boot_ci(boots.sum(1)); close(e['indirect'][-1]['llci'], lo, f'{key} totind LLCI'); close(e['indirect'][-1]['ulci'], hi, f'{key} totind ULCI')
+    # 간접효과 경로 간 차이(0.6.0에서 추가된 계산): 같은 부트스트랩 표본에서 두 간접효과의 차이(또는 절댓값 차이)를 다시 구해 대조
+    #   엔진은 모든 순서쌍(i, j)을 따로 계산하므로 두 방향을 모두 확인함
+    global checks
+    cons = e.get('contrasts', [])
+    checks += 1
+    if len(cons) != len(routes)*(len(routes)-1): fails.append(f'{key} contrast 쌍 개수: engine={len(cons)} ref={len(routes)*(len(routes)-1)}')
+    for c in cons:
+        i, j = c['i'], c['j']
+        for mode, fn in (('raw', lambda u, v: u - v), ('abs', lambda u, v: np.abs(u) - np.abs(v))):
+            d = fn(boots[:, i], boots[:, j]); lo, hi = boot_ci(d); o = c[mode]; tag = f'{key} contrast {i+1}-{j+1} {mode}'
+            close(o['effect'], fn(ind[i], ind[j]), tag + ' effect'); close(o['bootSE'], d.std(ddof=1), tag + ' bootSE')
+            close(o['llci'], lo, tag + ' LLCI'); close(o['ulci'], hi, tag + ' ULCI')
+            checks += 1
+            if bool(o['significant']) != (not (lo <= 0 <= hi)): fails.append(tag + f' 유의 판정: engine={o["significant"]}')
 
 def check_mod(key):
     e = R[key]; sp = e['spec']; covs = sp['covariates']

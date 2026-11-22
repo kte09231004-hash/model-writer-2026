@@ -612,6 +612,20 @@
   // 간접 경로 번호: 효과 표와 같은 순서(논문 형식은 매개변인 1개 경로 먼저)
   function routeNums(res) { const shown = orderedRoutes(res); return shown.map((r, i) => ({ r, idx: res.indirect.indexOf(r), n: i + 1 })); }
   const routeArrow = (r, L) => r.route.map(v => nameOf(L, v)).join(' → ');
+  // 경계선 결과: 부트스트랩 신뢰구간의 한계값이 0에 매우 가까우면(백분위수 한계값의 몬테카를로 표준오차 3배 이내)
+  //   난수 시드나 반복 횟수에 따라 유의 판정이 달라질 수 있으므로 문장과 표 주석에 알림
+  //   몬테카를로 표준오차 ≈ SE × √(a(1−a)/B) / φ(z_a), a = (1 − 신뢰수준)/2, B = 부트스트랩 횟수 (정규 근사)
+  function nearZero(v, res) {
+    const B = res.spec.boot, a = (1 - res.spec.conf) / 2;
+    if (!B || !(v.bootSE > 0) || !isFinite(v.llci) || !isFinite(v.ulci)) return false;
+    const z = qnorm(a), mc = v.bootSE * Math.sqrt(a * (1 - a) / B) / (Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI));
+    return Math.min(Math.abs(v.llci), Math.abs(v.ulci)) < 3 * mc;
+  }
+  const BORDER = names => `${names.join(', ')}의 신뢰구간은 한쪽 한계값이 0에 매우 가까워, 부트스트랩 난수 시드나 반복 횟수에 따라 유의 판정이 달라질 수 있으므로 해석에 주의가 필요하다.`;
+  function borderIndirect(res, opt) {
+    if (res.model === 'moderation' || !res.indirect) return [];
+    return res.indirect.filter(r => nearZero(r, res)).map(r => (r.route ? `${routeArrow(r, opt.labels)} 경로 간접효과` : '총간접효과'));
+  }
 
   // 다중공선성: 예측변인이 하나인 회귀식은 판단 대상이 아님. 조절모형에서 원점수 곱을 쓴 경우 X·W·상호작용항은 구조적 공선성이므로 판단에서 제외
   function vifCheck(res, opt) {
@@ -677,6 +691,8 @@
       `B = ${abs ? '앞 간접효과의 절댓값에서 뒤 간접효과의 절댓값을 뺀 값' : '앞 간접효과에서 뒤 간접효과를 뺀 값'}, SE = 표준오차, CI = 신뢰구간, LL = 하한, UL = 상한. SE와 신뢰구간은 간접효과 검증과 같은 ${s.boot.toLocaleString()}회 부트스트랩 표본(난수 시드 = ${s.seed})마다 두 간접효과의 ${abs ? '절댓값 ' : ''}차이를 구해 백분위수 방법으로 산출함. 신뢰구간에 0이 포함되지 않으면 두 간접효과가 유의하게 다른 것으로 판단함. 여러 쌍을 비교하였으며 다중비교 보정은 적용하지 않음.`;
     if (!abs && cr.some(c => c.opposite)) note += ' 부호가 서로 다른 두 간접효과의 차이는 크기(절댓값) 비교가 아님.';
     if (flag.widened) note += ' 표시 자릿수에서 0으로 반올림되는 신뢰구간 한계값은 자릿수를 늘려 표시함.';
+    const nb = cr.filter(c => nearZero(c.v, res));
+    if (nb.length) note += ` ${nb.map(c => 'C' + c.no).join(', ')}의 신뢰구간은 한쪽 한계값이 0에 매우 가까워 난수 시드나 반복 횟수에 따라 유의 판정이 달라질 수 있음.`;
     return { key: 'contrast', left: 1, title: '간접효과 경로 간 차이 검증', headers: ['비교', 'B', 'SE', `${conf}% CI LL`, `${conf}% CI UL`], rows, note };
   }
   function contrastText(res, opt, cr, no) {
@@ -695,6 +711,8 @@
     if (many && ns.length) sents.push(`${ns.length === cr.length ? `${cr.length}개 비교` : `나머지 ${ns.length}개 비교(${ns.map(c => 'C' + c.no).join(', ')})`}에서는 두 간접효과의 ${abs ? '크기(절댓값) ' : ''}차이가 통계적으로 유의하지 않았다${no ? `(표 ${no})` : ''}`);
     let t = `간접효과의 상대적 크기를 비교하기 위해 간접효과 쌍마다 부트스트랩 표본별 ${abs ? '절댓값 ' : ''}차이를 구하여 ${conf}% 신뢰구간을 산출하였다${no ? `(표 ${no})` : ''}. ` + sents.join('. ') + '.';
     if (ns.length) t += ' 차이가 유의하지 않다는 결과는 두 간접효과의 크기가 같다는 것을 입증하지는 않는다.';
+    const nb = cr.filter(c => nearZero(c.v, res));
+    if (nb.length) t += ' ' + BORDER(nb.map(c => 'C' + c.no));
     return t;
   }
 
@@ -708,6 +726,8 @@
   function extraText(res, opt, paras) {
     const x = XO(opt), T = opt.tabNo || {};
     let out = paras.slice();
+    const nb = borderIndirect(res, opt);
+    if (nb.length && out.length) out[out.length - 1] += ' ' + BORDER(nb);
     if (x.vif && res.diagnostics) out.unshift(vifText(res, opt, T.reg ? T.reg - 1 : 0));
     const next = T.eff ? T.eff + 1 : 0;
     const cr = x.contrast ? contrastRows(res, opt) : [];

@@ -1,5 +1,5 @@
 /*
- * 매개·조절 분석 계산 엔진 (MVP)
+ * 매개·조절 분석 계산 엔진
  * - 최소제곱(OLS) 회귀, 일반(동분산 가정) 표준오차
  * - 단순매개(매개변인 1개) / 순차매개(매개변인 2~4개) / 조절(X×W)
  * - 간접효과: 사례 재표집 부트스트랩, 백분위수(percentile) 신뢰구간
@@ -589,7 +589,7 @@
     return { scores, alpha, nComplete: complete.length, outOfRange };
   }
 
-  const VERSION = '0.6.0';
+  const VERSION = '0.7.0';
   const api = { VERSION, ols, diagnose, mediation, moderation, scoreScale, basic, alphaOf, pearson, skewness, kurtosis, tPvalue, fPvalue, tCrit, percentile, bootCI, mulberry32, mean, sd, prepare };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
